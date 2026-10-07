@@ -51,3 +51,61 @@ export async function toggleBookmark(args:{user:User;volumeId:string;chapterId:s
 export async function signIn(email:string,password:string){ if(!supabase) throw new Error("Supabase belum dikonfigurasi di environment aplikasi."); return supabase.auth.signInWithPassword({email,password}); }
 export async function signUp(email:string,password:string,displayName:string){ if(!supabase) throw new Error("Supabase belum dikonfigurasi di environment aplikasi."); return supabase.auth.signUp({email,password,options:{data:{full_name:displayName}}}); }
 export async function signOut(){ if(!supabase) return; const {error}=await supabase.auth.signOut(); if(error) throw error; }
+
+export async function uploadVolumePdf(args:{user:User;volumeId:string;file:File}) {
+  if (!supabase) throw new Error("Supabase belum dikonfigurasi di environment aplikasi.");
+  if (args.file.type !== "application/pdf") throw new Error("File harus berupa PDF.");
+  const maxBytes = 500 * 1024 * 1024;
+  if (args.file.size > maxBytes) throw new Error("PDF terlalu besar. Batas penyimpanan Lumen adalah 500 MB.");
+
+  const safeName = args.file.name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "volume.pdf";
+  const path = `${args.volumeId}/${crypto.randomUUID()}-${safeName}`;
+
+  const upload = await supabase.storage.from("novel-pdfs").upload(path, args.file, {
+    contentType: "application/pdf",
+    upsert: false,
+    cacheControl: "3600",
+  });
+  if (upload.error) throw upload.error;
+
+  const { error: volumeError } = await supabase
+    .from("volumes")
+    .update({ pdf_path: path, publication_status: "processing" })
+    .eq("id", args.volumeId);
+  if (volumeError) {
+    await supabase.storage.from("novel-pdfs").remove([path]).catch(() => undefined);
+    throw volumeError;
+  }
+
+  const { data: job, error: jobError } = await supabase
+    .from("processing_jobs")
+    .insert({
+      volume_id: args.volumeId,
+      input_path: path,
+      status: "queued",
+      created_by: args.user.id,
+    })
+    .select("id")
+    .single();
+  if (jobError || !job) {
+    await supabase.storage.from("novel-pdfs").remove([path]).catch(() => undefined);
+    throw jobError ?? new Error("Processing job could not be created.");
+  }
+
+  const stages = [
+    "validate_file","extract_text_ocr","analyze_structure","detect_chapters",
+    "extract_metadata","generate_summaries","characters_glossary",
+    "generate_embeddings","human_review","publish",
+  ];
+  const { error: stagesError } = await supabase.from("processing_job_stages").insert(
+    stages.map((stage_key,index)=>({job_id:job.id,stage_order:index+1,stage_key,status:"waiting",progress_percent:0}))
+  );
+  if (stagesError) throw stagesError;
+
+  return job.id;
+}
+
+export async function startProcessingJob(jobId:string) {
+  if (!supabase) throw new Error("Supabase belum dikonfigurasi di environment aplikasi.");
+  return supabase.functions.invoke("process-volume", { body: { job_id: jobId } });
+}
