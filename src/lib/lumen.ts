@@ -7,6 +7,80 @@ export type CatalogBook = { id:string; slug:string; title:string; alternate_titl
 export type UserBookmark = { id:string; volume_id:string; chapter_id:string|null; page_number:number; note:string|null; created_at:string };
 export type ReadingProgress = { volume_id:string; chapter_id:string|null; page_number:number; progress_percent:number; last_read_at:string };
 
+export type ProcessingJob = {
+  id:string;
+  volume_id:string|null;
+  input_path:string;
+  status:"queued"|"processing"|"completed"|"failed"|"cancelled";
+  current_stage:string|null;
+  progress_percent:number;
+  error_message:string|null;
+  started_at:string|null;
+  finished_at:string|null;
+  created_at:string;
+  updated_at:string;
+  file_size_bytes:number|null;
+};
+
+export type ProcessingStage = {
+  id:string;
+  job_id:string;
+  stage_order:number;
+  stage_key:string;
+  status:"waiting"|"running"|"completed"|"failed"|"skipped";
+  progress_percent:number;
+  started_at:string|null;
+  finished_at:string|null;
+  error_message:string|null;
+  metadata:Record<string, unknown>;
+};
+
+export type ProcessingLog = {
+  id:number;
+  job_id:string;
+  created_at:string;
+  level:"debug"|"info"|"ai"|"warn"|"error";
+  message:string;
+  metadata:Record<string, unknown>;
+};
+
+export async function fetchLatestProcessingJob(volumeId:string):Promise<ProcessingJob|null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from("processing_jobs")
+    .select("id,volume_id,input_path,status,current_stage,progress_percent,error_message,started_at,finished_at,created_at,updated_at,file_size_bytes")
+    .eq("volume_id", volumeId)
+    .order("created_at",{ascending:false})
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data as ProcessingJob | null;
+}
+
+export async function fetchProcessingStages(jobId:string):Promise<ProcessingStage[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("processing_job_stages")
+    .select("id,job_id,stage_order,stage_key,status,progress_percent,started_at,finished_at,error_message,metadata")
+    .eq("job_id", jobId)
+    .order("stage_order",{ascending:true});
+  if (error) throw error;
+  return (data ?? []) as ProcessingStage[];
+}
+
+export async function fetchProcessingLogs(jobId:string):Promise<ProcessingLog[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("processing_job_logs")
+    .select("id,job_id,created_at,level,message,metadata")
+    .eq("job_id", jobId)
+    .order("created_at",{ascending:false})
+    .limit(40);
+  if (error) throw error;
+  return (data ?? []).reverse() as ProcessingLog[];
+}
+
+
 export async function fetchCatalog(): Promise<CatalogBook[]> {
   if (!supabase) return [];
   const { data, error } = await supabase.from("novels").select("id,slug,title,alternate_title,author,description,cover_path,genres,language,rating_avg,rating_count,featured,volumes(id,volume_number,title,subtitle,description,page_count,chapters(id,chapter_number,title,slug,start_page,end_page,spoiler_safe_summary))").eq("publication_status","published").order("featured",{ascending:false}).order("updated_at",{ascending:false});
