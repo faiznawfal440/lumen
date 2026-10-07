@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
-import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, semanticSearch, startProcessingJob, uploadVolumePdf, createNovel, fetchCurrentUserRole, fetchLatestProcessingJob, fetchProcessingStages, fetchProcessingLogs, type CatalogBook, type UserBookmark, type SemanticSearchResult, type ProcessingJob, type ProcessingStage, type ProcessingLog } from "./lib/lumen";
+import { fetchCatalog, fetchAdminCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, semanticSearch, startProcessingJob, uploadVolumePdf, createNovel, createVolume, updateNovelMetadata, updateVolumeMetadata, uploadNovelCover, updateChapterReview, fetchCurrentUserRole, fetchLatestProcessingJob, fetchProcessingStages, fetchProcessingLogs, fetchVolumeReview, publishVolume, getPublishedPdfUrl, fetchCommunityPosts, createCommunityPost, createCommunityComment, type CatalogBook, type UserBookmark, type SemanticSearchResult, type ProcessingJob, type ProcessingStage, type ProcessingLog, type VolumeReview, type CommunityPost } from "./lib/lumen";
 import { supabase } from "./lib/supabase";
 
-type View = "home" | "search" | "reader" | "admin" | "library";
+type View = "home" | "search" | "reader" | "admin" | "library" | "community";
 type IconName =
   | "home" | "compass" | "book" | "search" | "users" | "bell" | "settings"
   | "arrow" | "play" | "star" | "clock" | "bookmark" | "sparkles" | "menu"
@@ -86,7 +86,7 @@ function Logo({ compact = false }: { compact?: boolean }) {
   return <div className="logo"><span className="logo-mark">L</span>{!compact && <span>Lumen</span>}</div>;
 }
 
-function Sidebar({ view, setView, onAuth }: { view: View; setView: (view: View) => void; onAuth: () => void }) {
+function Sidebar({ view, setView, onAuth, user }: { view: View; setView: (view: View) => void; onAuth: () => void; user: User | null }) {
   const items: { id: View | "library" | "community"; label: string; icon: IconName }[] = [
     { id: "home", label: "Home", icon: "home" }, { id: "search", label: "Explore", icon: "compass" },
     { id: "library", label: "My Library", icon: "library" }, { id: "community", label: "Community", icon: "users" },
@@ -94,7 +94,7 @@ function Sidebar({ view, setView, onAuth }: { view: View; setView: (view: View) 
   return <aside className="sidebar">
     <Logo />
     <nav className="side-nav" aria-label="Main navigation">
-      {items.map((item) => <button type="button" key={item.id} className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => setView(item.id === "community" ? "home" : item.id)}><Icon name={item.icon}/><span>{item.label}</span></button>)}
+      {items.map((item) => <button type="button" key={item.id} className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => setView(item.id)}><Icon name={item.icon}/><span>{item.label}</span></button>)}
     </nav>
     <div className="side-label">Workspace</div>
     <button type="button" className={`nav-item ${view === "admin" ? "active" : ""}`} onClick={() => setView("admin")}><Icon name="sparkles"/><span>AI Studio</span></button>
@@ -220,367 +220,101 @@ function SearchView({ setView, user, onAuth, onRead }: { setView: (view: View) =
     </div>
   </main>;
 }
-function Reader({
-  setView,
-  user,
-  onAuth,
-  syncVolumeId,
-  syncChapterId,
-  volume,
-  chapter,
-  onSelectChapter,
-}: {
-  setView: (view: View) => void;
-  user: User | null;
-  onAuth: () => void;
-  syncVolumeId: string | null;
-  syncChapterId: string | null;
-  volume: CatalogBook["volumes"][number] | undefined;
-  chapter: CatalogBook["volumes"][number]["chapters"][number] | undefined;
-  onSelectChapter: (chapterId: string) => void;
-}) {
-  const [theme, setTheme] = useState<"light"|"sepia"|"dark"|"amoled">("sepia");
-  const [panel, setPanel] = useState<"toc"|"info"|null>("info");
-  const [saved, setSaved] = useState(false);
-  const [pageNumber, setPageNumber] = useState(chapter?.start_page ?? 1);
-  const [pages, setPages] = useState<import("./lib/lumen").ChapterPage[]>([]);
-  const [pageLoading, setPageLoading] = useState(false);
-
-  const pageCount = Math.max(
-    (chapter?.end_page ?? 0) - (chapter?.start_page ?? 0) + 1,
-    pages.at(-1)?.page_number ?? 0,
-    1
-  );
-  const currentPage = pages.find((page) => page.page_number === pageNumber);
-  const fallbackTitle = chapter?.title ?? "Chapter";
-  const chapterNumber = chapter?.chapter_number ?? 1;
-
-  useEffect(() => {
-    let active = true;
-    if (!syncChapterId) {
-      setPages([]);
-      return () => { active = false; };
-    }
-    setPageLoading(true);
-    import("./lib/lumen").then(({ fetchChapterPages }) =>
-      fetchChapterPages(syncChapterId)
-        .then((items) => {
-          if (active) {
-            setPages(items);
-            const firstAvailable = items[0]?.page_number;
-            if (firstAvailable && pageNumber < firstAvailable) setPageNumber(firstAvailable);
-          }
-        })
-        .catch(() => {
-          if (active) setPages([]);
-        })
-        .finally(() => {
-          if (active) setPageLoading(false);
-        })
-    );
-    return () => { active = false; };
-  }, [syncChapterId]);
-
-  useEffect(() => {
-    if (!user || !syncVolumeId) return;
-    import("./lib/lumen").then(({ fetchUserBookmarks, fetchUserProgress }) => {
-      fetchUserBookmarks(user.id)
-        .then((items) => setSaved(items.some((item) => item.volume_id === syncVolumeId && item.page_number === pageNumber)))
-        .catch(() => undefined);
-      fetchUserProgress(user.id)
-        .then((items) => {
-          const savedProgress = items.find((item) => item.volume_id === syncVolumeId);
-          if (savedProgress?.page_number) setPageNumber(savedProgress.page_number);
-        })
-        .catch(() => undefined);
-    });
-  }, [user, syncVolumeId]);
-
-  async function persistProgress(nextPage: number) {
-    if (!user || !syncVolumeId) return;
-    const pct = Math.max(0, Math.min(100, (nextPage / pageCount) * 100));
-    const { saveReadingProgress } = await import("./lib/lumen");
-    try {
-      await saveReadingProgress({
-        user,
-        volumeId: syncVolumeId,
-        chapterId: syncChapterId,
-        pageNumber: nextPage,
-        progressPercent: pct
-      });
-    } catch (error) {
-      console.debug(error);
-    }
-  }
-
-  async function goToPage(nextPage: number) {
-    const next = Math.max(1, Math.min(pageCount, nextPage));
-    setPageNumber(next);
-    void persistProgress(next);
-  }
-
-  async function handleBookmark() {
-    if (!user) { onAuth(); return; }
-    if (!syncVolumeId) return;
-    const { toggleBookmark } = await import("./lib/lumen");
-    try {
-      const next = await toggleBookmark({
-        user,
-        volumeId: syncVolumeId,
-        chapterId: syncChapterId,
-        pageNumber
-      });
-      setSaved(next);
-    } catch {
-      /* keep reader responsive */
-    }
-  }
-
-  const paragraphs = (currentPage?.content ?? "").split(/\\n\\s*\\n|\\n/).map((text) => text.trim()).filter(Boolean);
-
-  return <div className={`reader theme-${theme}`}>
-    <header className="reader-top">
-      <Button variant="icon" icon="close" label="Close reader" onClick={() => setView("home")}/>
-      <div className="reader-title">
-        <strong>{volume ? `${volume.title ?? `Volume ${volume.volume_number}`} — ${volume.subtitle ?? ""}` : "Lumen Reader"}</strong>
-        <small>{`Chapter ${chapterNumber} · ${fallbackTitle}`}</small>
-      </div>
-      <div className="reader-tools">
-        <Button variant="icon" icon="search" label="Search in book"/>
-        <Button variant="icon" icon="type" label="Typography settings"/>
-        <Button variant="icon" icon="list" label="Table of contents" onClick={()=>setPanel(panel==="toc"?null:"toc")}/>
-        <Button variant="icon" icon="panel" label="Knowledge panel" onClick={()=>setPanel(panel==="info"?null:"info")}/>
-        <Button variant="icon" icon={saved?"check":"bookmark"} label="Bookmark" onClick={handleBookmark}/>
-      </div>
-    </header>
-    <div className="reader-progress"><i style={{width:`${Math.round((pageNumber / pageCount) * 100)}%`}}></i></div>
-    <div className="reader-shell">
-      <aside className="reader-rail">
-        <Button variant="icon" icon="chevron" label="Previous page" onClick={() => void goToPage(pageNumber - 1)}/>
-        <span>{pageNumber}</span>
-        <div className="vertical-track"><i style={{height:`${Math.min(100, (pageNumber / pageCount) * 100)}%`}}></i></div>
-        <span>{pageCount}</span>
-        <Button variant="icon" icon="chevron" label="Next page" onClick={() => void goToPage(pageNumber + 1)}/>
-      </aside>
-      <article className="reading-page">
-        <div className="chapter-mark"><span>CHAPTER {String(chapterNumber).padStart(2, "0")}</span><i></i></div>
-        <h1>{fallbackTitle}</h1>
-        {pageLoading && <div className="reader-inline-status">Loading extracted page…</div>}
-        {!pageLoading && paragraphs.length === 0 && (
-          <div className="reader-inline-status">
-            <strong>Page {pageNumber} has not been extracted yet.</strong>
-            <span>The PDF processing pipeline needs to finish this page before Lumen can display its text.</span>
-          </div>
-        )}
-        {paragraphs.map((paragraph, index) =>
-          <p className={index === 0 ? "dropcap" : ""} key={`${pageNumber}-${index}`}>{paragraph}</p>
-        )}
-        <div className="scene-break">✦</div>
-        <footer><span>{volume?.title ?? "LUMEN"}</span><b>— {pageNumber} —</b><span>VOLUME {volume?.volume_number ?? ""}</span></footer>
+function Reader({setView,user,onAuth,syncVolumeId,syncChapterId,volume,chapter,onSelectChapter}:{setView:(view:View)=>void;user:User|null;onAuth:()=>void;syncVolumeId:string|null;syncChapterId:string|null;volume:CatalogBook["volumes"][number]|undefined;chapter:CatalogBook["volumes"][number]["chapters"][number]|undefined;onSelectChapter:(chapterId:string)=>void}){
+  const [theme,setTheme]=useState<"light"|"sepia"|"dark"|"amoled">("sepia");
+  const [panel,setPanel]=useState<"toc"|"info"|null>("info");
+  const [saved,setSaved]=useState(false);
+  const [pageNumber,setPageNumber]=useState(chapter?.start_page??1);
+  const [pages,setPages]=useState<import("./lib/lumen").ChapterPage[]>([]);
+  const [pageLoading,setPageLoading]=useState(false);
+  const [readerMode,setReaderMode]=useState<"text"|"pdf">("text");
+  const [originalPdfUrl,setOriginalPdfUrl]=useState("");
+  const [pdfLoading,setPdfLoading]=useState(false);
+  const [pdfMessage,setPdfMessage]=useState("");
+  const pageCount=Math.max((chapter?.end_page??0)-(chapter?.start_page??0)+1,pages.at(-1)?.page_number??0,1);
+  const currentPage=pages.find((page)=>page.page_number===pageNumber);
+  const fallbackTitle=chapter?.title??"Chapter"; const chapterNumber=chapter?.chapter_number??1;
+  useEffect(()=>{let active=true;setReaderMode("text");setOriginalPdfUrl("");setPdfMessage("");if(!syncChapterId){setPages([]);return()=>{active=false;};}setPageLoading(true);import("./lib/lumen").then(({fetchChapterPages})=>fetchChapterPages(syncChapterId).then((items)=>{if(active){setPages(items);const first=items[0]?.page_number;if(first&&pageNumber<first)setPageNumber(first);}}).catch(()=>{if(active)setPages([]);}).finally(()=>{if(active)setPageLoading(false);}));return()=>{active=false;};},[syncChapterId]);
+  useEffect(()=>{if(!user||!syncVolumeId)return;import("./lib/lumen").then(({fetchUserBookmarks,fetchUserProgress})=>{fetchUserBookmarks(user.id).then((items)=>setSaved(items.some((item)=>item.volume_id===syncVolumeId&&item.page_number===pageNumber))).catch(()=>undefined);fetchUserProgress(user.id).then((items)=>{const item=items.find((p)=>p.volume_id===syncVolumeId);if(item?.page_number)setPageNumber(item.page_number);}).catch(()=>undefined);});},[user,syncVolumeId]);
+  async function persistProgress(nextPage:number){if(!user||!syncVolumeId)return;const pct=Math.max(0,Math.min(100,(nextPage/pageCount)*100));const {saveReadingProgress}=await import("./lib/lumen");try{await saveReadingProgress({user,volumeId:syncVolumeId,chapterId:syncChapterId,pageNumber:nextPage,progressPercent:pct});}catch(error){console.debug(error);}}
+  function goToPage(nextPage:number){const next=Math.max(1,Math.min(pageCount,nextPage));setPageNumber(next);void persistProgress(next);}
+  async function handleBookmark(){if(!user){onAuth();return;}if(!syncVolumeId)return;const {toggleBookmark}=await import("./lib/lumen");try{setSaved(await toggleBookmark({user,volumeId:syncVolumeId,chapterId:syncChapterId,pageNumber}));}catch{}}
+  async function openPdf(){if(!syncVolumeId)return;setPdfLoading(true);setPdfMessage("");try{const url=await getPublishedPdfUrl(syncVolumeId);setOriginalPdfUrl(url);setReaderMode("pdf");}catch(error){setPdfMessage(error instanceof Error?error.message:"Original PDF could not be loaded.");}finally{setPdfLoading(false);}}
+  const paragraphs=(currentPage?.content??"").split(/\n\s*\n|\n/).map((text)=>text.trim()).filter(Boolean);
+  return <div className={"reader theme-"+theme}>
+    <header className="reader-top"><Button variant="icon" icon="close" label="Close reader" onClick={()=>setView("home")}/><div className="reader-title"><strong>{volume?((volume.title??("Volume "+volume.volume_number))+" — "+(volume.subtitle??"")):"Lumen Reader"}</strong><small>{"Chapter "+chapterNumber+" · "+fallbackTitle}</small></div><div className="reader-tools"><button type="button" className={"reader-mode-btn "+(readerMode==="text"?"active":"")} onClick={()=>setReaderMode("text")}>Text</button><button type="button" className={"reader-mode-btn "+(readerMode==="pdf"?"active":"")} onClick={()=>void openPdf()} disabled={pdfLoading}>{pdfLoading?"PDF…":"Original PDF"}</button><Button variant="icon" icon="search" label="Search in book" onClick={()=>setView("search")}/><Button variant="icon" icon="list" label="Table of contents" onClick={()=>setPanel(panel==="toc"?null:"toc")}/><Button variant="icon" icon="panel" label="Knowledge panel" onClick={()=>setPanel(panel==="info"?null:"info")}/><Button variant="icon" icon={saved?"check":"bookmark"} label="Bookmark" onClick={handleBookmark}/></div></header>
+    <div className="reader-progress"><i style={{width:(Math.round((pageNumber/pageCount)*100)+"%")}}></i></div>
+    <div className="reader-shell"><aside className="reader-rail"><Button variant="icon" icon="chevron" label="Previous page" onClick={()=>goToPage(pageNumber-1)}/><span>{pageNumber}</span><div className="vertical-track"><i style={{height:(Math.min(100,(pageNumber/pageCount)*100)+"%")}}></i></div><span>{pageCount}</span><Button variant="icon" icon="chevron" label="Next page" onClick={()=>goToPage(pageNumber+1)}/></aside>
+      <article className="reading-page"><div className="chapter-mark"><span>CHAPTER {String(chapterNumber).padStart(2,"0")}</span><i></i></div><h1>{fallbackTitle}</h1>
+        {readerMode==="pdf"&&originalPdfUrl?<div className="original-pdf-frame"><iframe title="Original PDF" src={originalPdfUrl}/></div>:<>{pageLoading&&<div className="reader-inline-status">Loading extracted page…</div>}{!pageLoading&&paragraphs.length===0&&<div className="reader-inline-status"><strong>{"Page "+pageNumber+" has not been extracted yet."}</strong><span>The PDF processing pipeline needs to finish this page before Lumen can display its text.</span></div>}{paragraphs.map((paragraph,index)=><p className={index===0?"dropcap":""} key={pageNumber+"-"+index}>{paragraph}</p>)}<div className="scene-break">✦</div></>}
+        <footer><span>{volume?.title??"LUMEN"}</span><b>{"— "+pageNumber+" —"}</b><span>{"VOLUME "+(volume?.volume_number??"")}</span></footer>
       </article>
-      {panel && <aside className="knowledge-panel">
-        <div className="panel-tabs">
-          <button type="button" className={panel==="info"?"active":""} onClick={()=>setPanel("info")}>Knowledge</button>
-          <button type="button" className={panel==="toc"?"active":""} onClick={()=>setPanel("toc")}>Contents</button>
-        </div>
-        {panel === "info" ? <div className="reader-context-empty">
-          <div className="safe-badge"><Icon name="eye" size={15}/> Safe for current volume</div>
-          <h2>In this scene</h2>
-          <p>Character and glossary extraction will appear here as the AI processing pipeline completes the volume.</p>
-          <div className="glossary"><strong>Chapter summary</strong><p>{chapter?.spoiler_safe_summary ?? "No spoiler-safe summary has been generated yet."}</p></div>
-        </div> :
-        <><h2>Table of contents</h2>{(volume?.chapters ?? []).map((item)=>(
-          <button type="button" className={item.id===syncChapterId?"chapter-link active":"chapter-link"} key={item.id} onClick={()=>onSelectChapter(item.id)}>
-            <span>{String(item.chapter_number).padStart(2,"0")}</span>{item.title}
-            {item.id===syncChapterId&&<Icon name="check" size={15}/>}
-          </button>
-        ))}</>}
-      </aside>}
+      {panel&&<aside className="knowledge-panel"><div className="panel-tabs"><button type="button" className={panel==="info"?"active":""} onClick={()=>setPanel("info")}>Knowledge</button><button type="button" className={panel==="toc"?"active":""} onClick={()=>setPanel("toc")}>Contents</button></div>{panel==="info"?<div className="reader-context-empty"><div className="safe-badge"><Icon name="eye" size={15}/> Safe for current volume</div><h2>In this scene</h2><p>Character and glossary extraction is surfaced from the processed volume when available.</p><div className="glossary"><strong>Chapter summary</strong><p>{chapter?.spoiler_safe_summary??"No spoiler-safe summary has been generated yet."}</p></div></div>:<><h2>Table of contents</h2>{(volume?.chapters??[]).map((item)=><button type="button" className={item.id===syncChapterId?"chapter-link active":"chapter-link"} key={item.id} onClick={()=>onSelectChapter(item.id)}><span>{String(item.chapter_number).padStart(2,"0")}</span>{item.title}{item.id===syncChapterId&&<Icon name="check" size={15}/>}</button>)}</>}</aside>}
     </div>
-    <div className="reader-bottom">
-      <div className="themes">{(["light","sepia","dark","amoled"] as const).map(t=><button type="button" aria-label={`${t} reading theme`} className={`${t} ${theme===t?"active":""}`} key={t} onClick={()=>setTheme(t)}></button>)}</div>
-      <div className="page-nav">
-        <Button variant="ghost" onClick={() => void goToPage(pageNumber - 1)}>Previous</Button>
-        <span>{Math.round((pageNumber / pageCount) * 100)}% · {Math.max(0, pageCount - pageNumber)} pages left</span>
-        <Button variant="primary" onClick={() => void goToPage(pageNumber + 1)}>Next page <Icon name="arrow"/></Button>
-      </div>
-      <Button variant="ghost" icon="settings">Reading settings</Button>
-    </div>
-    {saved && <div className="toast"><Icon name="check"/><div><strong>Bookmark added</strong><small>Page {pageNumber} · Chapter {chapterNumber}</small></div></div>}
+    {pdfMessage&&<div className="toast"><Icon name="close"/><div><strong>PDF unavailable</strong><small>{pdfMessage}</small></div></div>}
+    <div className="reader-bottom"><div className="themes">{(["light","sepia","dark","amoled"] as const).map((t)=><button type="button" aria-label={t+" reading theme"} className={t+" "+(theme===t?"active":"")} key={t} onClick={()=>setTheme(t)}></button>)}</div><div className="page-nav"><Button variant="ghost" onClick={()=>goToPage(pageNumber-1)}>Previous</Button><span>{Math.round((pageNumber/pageCount)*100)}% · {Math.max(0,pageCount-pageNumber)} pages left</span><Button variant="primary" onClick={()=>goToPage(pageNumber+1)}>Next page <Icon name="arrow"/></Button></div><Button variant="ghost" icon="settings">Reading settings</Button></div>
+    {saved&&<div className="toast"><Icon name="check"/><div><strong>Bookmark added</strong><small>{"Page "+pageNumber+" · Chapter "+chapterNumber}</small></div></div>}
   </div>;
 }
 
-
 const stages = ["Validate file","Extract text & OCR","Analyze structure","Detect chapters","Extract metadata","Generate summaries","Characters & glossary","Generate embeddings","Human review","Publish"];
 
-function AdminView({ catalog, user, onAuth, onCatalogChanged }: { catalog: CatalogBook[]; user: User | null; onAuth: () => void; onCatalogChanged: () => Promise<void> }) {
-  const [selectedStage, setSelectedStage] = useState(5);
-  const [selectedVolumeId, setSelectedVolumeId] = useState("");
-  const [uploadMessage, setUploadMessage] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [job, setJob] = useState<ProcessingJob | null>(null);
-  const [jobStages, setJobStages] = useState<ProcessingStage[]>([]);
-  const [jobLogs, setJobLogs] = useState<ProcessingLog[]>([]);
-  const [novelOpen, setNovelOpen] = useState(false);
-  const [novelMessage, setNovelMessage] = useState("");
-  const [novelSaving, setNovelSaving] = useState(false);
-  const [novelTitle, setNovelTitle] = useState("");
-  const [novelAlternateTitle, setNovelAlternateTitle] = useState("");
-  const [novelAuthor, setNovelAuthor] = useState("");
-  const [novelDescription, setNovelDescription] = useState("");
-  const [novelGenres, setNovelGenres] = useState("");
-  const [novelLanguage, setNovelLanguage] = useState("en");
-  const [novelVolumeNumber, setNovelVolumeNumber] = useState("1");
-  const [novelVolumeTitle, setNovelVolumeTitle] = useState("Volume 1");
-  const [novelVolumeSubtitle, setNovelVolumeSubtitle] = useState("");
-  const [role, setRole] = useState<"reader"|"editor"|"admin">("reader");
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const volumes = catalog.flatMap((book) => book.volumes.map((volume) => ({
-    ...volume,
-    novelTitle: book.title,
-  })));
-  useEffect(() => {
-    if (!selectedVolumeId && volumes[0]?.id) setSelectedVolumeId(volumes[0].id);
-  }, [selectedVolumeId, catalog]);
-
-  useEffect(() => {
-    if (!user) { setRole("reader"); return; }
-    fetchCurrentUserRole().then(setRole).catch(() => setRole("reader"));
-  }, [user?.id]);
-
-  async function refreshJob(volumeId = selectedVolumeId) {
-    if (!volumeId || !user) {
-      setJob(null); setJobStages([]); setJobLogs([]);
-      return;
-    }
-    try {
-      const nextJob = await fetchLatestProcessingJob(volumeId);
-      setJob(nextJob);
-      if (!nextJob) { setJobStages([]); setJobLogs([]); return; }
-      const [nextStages, nextLogs] = await Promise.all([
-        fetchProcessingStages(nextJob.id),
-        fetchProcessingLogs(nextJob.id),
-      ]);
-      setJobStages(nextStages);
-      setJobLogs(nextLogs);
-    } catch {
-      /* Keep the operations screen usable when policies are restrictive. */
-    }
-  }
-
-  useEffect(() => {
-    void refreshJob();
-    if (!selectedVolumeId || !user) return;
-    const interval = window.setInterval(() => void refreshJob(), 2500);
-    return () => window.clearInterval(interval);
-  }, [selectedVolumeId, user?.id]);
-
-  const selectedVolume = volumes.find((volume) => volume.id === selectedVolumeId);
-  const selectedNovel = catalog.find((book) => book.volumes.some((volume) => volume.id === selectedVolumeId));
-
-  async function handlePdf(file: File | undefined) {
-    if (!file) return;
-    if (!user) { setUploadMessage("Sign in first. Only editor/admin accounts can upload volumes."); onAuth(); return; }
-    if (!selectedVolumeId) { setUploadMessage("Select a volume first."); return; }
-    setUploading(true); setUploadMessage("");
-    try {
-      const jobId = await uploadVolumePdf({ user, volumeId: selectedVolumeId, file });
-      setUploadMessage("PDF uploaded. Starting AI processing…");
-      const started = await startProcessingJob(jobId);
-      if (started.error) {
-        setUploadMessage(`Job ${jobId.slice(0, 8)} created, but worker did not start: ${started.error.message}`);
-      } else {
-        setUploadMessage("Processing started. This screen now follows the live job state.");
-      }
-      await refreshJob(selectedVolumeId);
-    } catch (error) {
-      setUploadMessage(error instanceof Error ? error.message : "PDF upload failed.");
-      await refreshJob(selectedVolumeId);
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  async function handleCreateNovel() {
-    if (!user) { setNovelMessage("Sign in first. Only editor/admin accounts can add titles."); onAuth(); return; }
-    if (!novelTitle.trim()) { setNovelMessage("Novel title is required."); return; }
-    const volumeNumber = Number.parseInt(novelVolumeNumber, 10);
-    if (!Number.isInteger(volumeNumber) || volumeNumber < 1) { setNovelMessage("Volume number must be 1 or higher."); return; }
-    setNovelSaving(true); setNovelMessage("");
-    try {
-      const response = await createNovel({
-        user,
-        title: novelTitle.trim(),
-        alternateTitle: novelAlternateTitle.trim() || undefined,
-        author: novelAuthor.trim() || undefined,
-        description: novelDescription.trim() || undefined,
-        genres: novelGenres.split(",").map((item)=>item.trim()).filter(Boolean),
-        language: novelLanguage.trim() || "en",
-        volumeNumber,
-        volumeTitle: novelVolumeTitle.trim() || "Volume " + volumeNumber,
-        volumeSubtitle: novelVolumeSubtitle.trim() || undefined,
-      });
-      if (response.error) throw response.error;
-      await onCatalogChanged();
-      setNovelMessage("Novel created as Draft. You can now select its volume and upload the PDF.");
-      setNovelTitle(""); setNovelAlternateTitle(""); setNovelAuthor(""); setNovelDescription(""); setNovelGenres(""); setNovelLanguage("en"); setNovelVolumeNumber("1"); setNovelVolumeTitle("Volume 1"); setNovelVolumeSubtitle("");
-      setNovelOpen(false);
-    } catch (error) {
-      setNovelMessage(error instanceof Error ? error.message : "Novel creation failed.");
-    } finally {
-      setNovelSaving(false);
-    }
-  }
-
+function AdminView({catalog,user,onAuth,onCatalogChanged}:{catalog:CatalogBook[];user:User|null;onAuth:()=>void;onCatalogChanged:()=>Promise<void>}){
+  const [role,setRole]=useState<"reader"|"editor"|"admin">("reader");
+  const [adminCatalog,setAdminCatalog]=useState<CatalogBook[]>(catalog);
+  const [selectedNovelId,setSelectedNovelId]=useState(""); const [selectedVolumeId,setSelectedVolumeId]=useState("");
+  const [job,setJob]=useState<ProcessingJob|null>(null); const [jobStages,setJobStages]=useState<ProcessingStage[]>([]); const [jobLogs,setJobLogs]=useState<ProcessingLog[]>([]);
+  const [review,setReview]=useState<VolumeReview|null>(null); const [message,setMessage]=useState(""); const [saving,setSaving]=useState(false); const [uploading,setUploading]=useState(false); const [coverUploading,setCoverUploading]=useState(false);
+  const [novelOpen,setNovelOpen]=useState(false); const [volumeOpen,setVolumeOpen]=useState(false); const [novelSaving,setNovelSaving]=useState(false); const [volumeSaving,setVolumeSaving]=useState(false);
+  const [novelTitle,setNovelTitle]=useState(""); const [novelAlternateTitle,setNovelAlternateTitle]=useState(""); const [novelAuthor,setNovelAuthor]=useState(""); const [novelDescription,setNovelDescription]=useState(""); const [novelGenres,setNovelGenres]=useState(""); const [novelLanguage,setNovelLanguage]=useState("en"); const [novelVolumeNumber,setNovelVolumeNumber]=useState("1"); const [novelVolumeTitle,setNovelVolumeTitle]=useState("Volume 1"); const [novelVolumeSubtitle,setNovelVolumeSubtitle]=useState("");
+  const [editTitle,setEditTitle]=useState(""); const [editAlt,setEditAlt]=useState(""); const [editAuthor,setEditAuthor]=useState(""); const [editDescription,setEditDescription]=useState(""); const [editGenres,setEditGenres]=useState(""); const [editLanguage,setEditLanguage]=useState("en"); const [editFeatured,setEditFeatured]=useState(false);
+  const [volNumber,setVolNumber]=useState("1"); const [volTitle,setVolTitle]=useState(""); const [volSubtitle,setVolSubtitle]=useState(""); const [volDescription,setVolDescription]=useState("");
+  const [chapterDrafts,setChapterDrafts]=useState<Record<string,{title:string;summary:string}>>({}); const [coverFile,setCoverFile]=useState<File|null>(null);
+  const fileRef=useRef<HTMLInputElement>(null); const coverRef=useRef<HTMLInputElement>(null);
+  const novels=adminCatalog; const selectedNovel=novels.find((n)=>n.id===selectedNovelId)??novels[0];
+  const volumes=novels.flatMap((book)=>book.volumes.map((volume)=>({...volume,novelId:book.id,novelTitle:book.title})));
+  const selectedVolume=volumes.find((v)=>v.id===selectedVolumeId)??selectedNovel?.volumes[0]; const selectedRealNovel=selectedVolume?novels.find((n)=>n.id===selectedVolume.novelId):selectedNovel;
+  const canManage=role==="editor"||role==="admin"; const canPublish=canManage&&Boolean(review?.page_count)&&Boolean(review?.chapters.length)&&selectedVolume?.publication_status==="review";
+  async function loadAdminCatalog(){if(!user||role==="reader"){setAdminCatalog(catalog);return;}try{const data=await fetchAdminCatalog();setAdminCatalog(data);if(!selectedNovelId&&data[0]?.id)setSelectedNovelId(data[0].id);if(!selectedVolumeId&&data[0]?.volumes[0]?.id)setSelectedVolumeId(data[0].volumes[0].id);}catch{setAdminCatalog(catalog);}}
+  useEffect(()=>{if(!user){setRole("reader");setAdminCatalog(catalog);return;}fetchCurrentUserRole().then(setRole).catch(()=>setRole("reader"));},[user?.id]);
+  useEffect(()=>{if(role!=="reader")void loadAdminCatalog();else setAdminCatalog(catalog);},[role,catalog]);
+  useEffect(()=>{if(selectedNovelId&&!novels.some((n)=>n.id===selectedNovelId))setSelectedNovelId(novels[0]?.id??"");if(!selectedVolumeId||!volumes.some((v)=>v.id===selectedVolumeId)){const next=selectedNovel?.volumes[0]?.id??volumes[0]?.id??"";setSelectedVolumeId(next);}},[adminCatalog,selectedNovelId,selectedVolumeId]);
+  useEffect(()=>{const v=volumes.find((x)=>x.id===selectedVolumeId);if(v){setSelectedNovelId(v.novelId);setVolNumber(String(v.volume_number));setVolTitle(v.title);setVolSubtitle(v.subtitle??"");setVolDescription(v.description??"");}},[selectedVolumeId,adminCatalog]);
+  useEffect(()=>{if(selectedRealNovel){setEditTitle(selectedRealNovel.title);setEditAlt(selectedRealNovel.alternate_title??"");setEditAuthor(selectedRealNovel.author??"");setEditDescription(selectedRealNovel.description??"");setEditGenres(selectedRealNovel.genres.join(", "));setEditLanguage(selectedRealNovel.language);setEditFeatured(Boolean(selectedRealNovel.featured));}},[selectedNovelId,selectedVolumeId,adminCatalog]);
+  async function refreshJob(){if(!user||!selectedVolumeId){setJob(null);setJobStages([]);setJobLogs([]);return;}try{const next=await fetchLatestProcessingJob(selectedVolumeId);setJob(next);if(!next){setJobStages([]);setJobLogs([]);return;}const [stages,logs]=await Promise.all([fetchProcessingStages(next.id),fetchProcessingLogs(next.id)]);setJobStages(stages);setJobLogs(logs);}catch{}}
+  async function refreshReview(){if(!selectedVolumeId||role==="reader"){setReview(null);return;}try{const data=await fetchVolumeReview(selectedVolumeId);setReview(data);const drafts={};for(const c of data?.chapters??[])drafts[c.id]={title:c.title,summary:c.summary??c.spoiler_safe_summary??""};setChapterDrafts(drafts);}catch{setReview(null);}}
+  useEffect(()=>{void refreshJob();void refreshReview();if(!selectedVolumeId||!user)return;const id=window.setInterval(()=>void refreshJob(),3000);return()=>window.clearInterval(id);},[selectedVolumeId,user?.id,role]);
+  async function handleCreateNovel(){if(!user){onAuth();return;}if(!novelTitle.trim()){setMessage("Novel title is required.");return;}const number=Number.parseInt(novelVolumeNumber,10);if(!Number.isInteger(number)||number<1){setMessage("Volume number must be 1 or higher.");return;}setNovelSaving(true);setMessage("");try{const r=await createNovel({user,title:novelTitle.trim(),alternateTitle:novelAlternateTitle.trim()||undefined,author:novelAuthor.trim()||undefined,description:novelDescription.trim()||undefined,genres:novelGenres.split(",").map(x=>x.trim()).filter(Boolean),language:novelLanguage.trim()||"en",volumeNumber:number,volumeTitle:novelVolumeTitle.trim()||("Volume "+number),volumeSubtitle:novelVolumeSubtitle.trim()||undefined});if(r.error)throw r.error;const data=await fetchAdminCatalog();setAdminCatalog(data);const created=data.find((n)=>n.slug===r.data?.slug);if(created?.id)setSelectedNovelId(created.id);if(r.data?.volume_id)setSelectedVolumeId(r.data.volume_id);await onCatalogChanged();setNovelOpen(false);setNovelTitle("");setNovelAlternateTitle("");setNovelAuthor("");setNovelDescription("");setNovelGenres("");setNovelLanguage("en");setNovelVolumeNumber("1");setNovelVolumeTitle("Volume 1");setNovelVolumeSubtitle("");setMessage("Draft novel created. Upload its PDF.");}catch(error){setMessage(error instanceof Error?error.message:"Novel creation failed.");}finally{setNovelSaving(false);}}
+  async function saveNovel(){if(!selectedRealNovel)return;setSaving(true);try{await updateNovelMetadata({novelId:selectedRealNovel.id,title:editTitle,alternateTitle:editAlt,author:editAuthor,description:editDescription,genres:editGenres.split(",").map(x=>x.trim()).filter(Boolean),language:editLanguage,featured:editFeatured});await loadAdminCatalog();await onCatalogChanged();setMessage("Novel metadata saved.");}catch(error){setMessage(error instanceof Error?error.message:"Could not save novel.");}finally{setSaving(false);}}
+  async function saveVolume(){if(!selectedVolume)return;const n=Number.parseInt(volNumber,10);if(!Number.isInteger(n)||n<1){setMessage("Volume number must be 1 or higher.");return;}setVolumeSaving(true);try{await updateVolumeMetadata({volumeId:selectedVolume.id,volumeNumber:n,title:volTitle,subtitle:volSubtitle,description:volDescription});await loadAdminCatalog();await onCatalogChanged();setMessage("Volume metadata saved.");}catch(error){setMessage(error instanceof Error?error.message:"Could not save volume.");}finally{setVolumeSaving(false);}}
+  async function handleCreateVolume(){if(!selectedRealNovel)return;const n=Number.parseInt(volNumber,10);if(!Number.isInteger(n)||n<1){setMessage("Volume number must be 1 or higher.");return;}setVolumeSaving(true);try{const id=await createVolume({novelId:selectedRealNovel.id,volumeNumber:n,title:volTitle||("Volume "+n),subtitle:volSubtitle,description:volDescription});await loadAdminCatalog();setSelectedVolumeId(id);setVolumeOpen(false);setMessage("Draft volume created.");}catch(error){setMessage(error instanceof Error?error.message:"Could not create volume.");}finally{setVolumeSaving(false);}}
+  async function handleCover(){if(!coverFile||!selectedRealNovel)return;setCoverUploading(true);try{await uploadNovelCover({novelId:selectedRealNovel.id,file:coverFile});setCoverFile(null);if(coverRef.current)coverRef.current.value="";await loadAdminCatalog();await onCatalogChanged();setMessage("Cover uploaded.");}catch(error){setMessage(error instanceof Error?error.message:"Cover upload failed.");}finally{setCoverUploading(false);}}
+  async function handlePdf(file:File|undefined){if(!file)return;if(!user){onAuth();return;}if(!selectedVolumeId){setMessage("Select a volume first.");return;}setUploading(true);setMessage("");try{const jobId=await uploadVolumePdf({user,volumeId:selectedVolumeId,file});const started=await startProcessingJob(jobId);if(started.error)setMessage("Job "+jobId.slice(0,8)+" created, but worker did not start: "+started.error.message);else setMessage("PDF uploaded. Full ingestion has started.");await loadAdminCatalog();await refreshJob();}catch(error){setMessage(error instanceof Error?error.message:"PDF upload failed.");}finally{setUploading(false);}}
+  async function retryJob(){if(!job)return;setUploading(true);setMessage("");try{const r=await startProcessingJob(job.id);if(r.error)throw r.error;setMessage("Processing retry started.");await refreshJob();}catch(error){setMessage(error instanceof Error?error.message:"Retry failed.");}finally{setUploading(false);}}
+  async function saveChapter(id:string){const draft=chapterDrafts[id];if(!draft)return;try{await updateChapterReview({chapterId:id,title:draft.title,summary:draft.summary,spoilerSafeSummary:draft.summary,status:"draft"});setMessage("Chapter review saved.");await refreshReview();}catch(error){setMessage(error instanceof Error?error.message:"Could not save chapter.");}}
+  async function handlePublish(){if(!selectedVolumeId)return;setSaving(true);try{const r=await publishVolume(selectedVolumeId);if(r.error)throw r.error;await loadAdminCatalog();await onCatalogChanged();await refreshJob();await refreshReview();setMessage("Volume published successfully.");}catch(error){setMessage(error instanceof Error?error.message:"Publish failed.");}finally{setSaving(false);}}
   return <main className="page admin-page">
-    <div className="admin-head">
-      <div><span className="eyebrow">AI PROCESSING STUDIO</span><h1>Volume processing</h1><p>Review extraction quality, generated metadata, and publishing readiness.</p></div>
-      <div className="admin-upload-actions">
-        <select aria-label="Select volume" value={selectedVolumeId} onChange={(e)=>setSelectedVolumeId(e.target.value)}>
-          {volumes.map((volume)=><option key={volume.id} value={volume.id}>{volume.novelTitle} · Vol. {volume.volume_number}</option>)}
-        </select>
-        <input ref={fileRef} type="file" accept="application/pdf,.pdf" hidden onChange={(e)=>{ void handlePdf(e.target.files?.[0]); e.currentTarget.value=""; }} />
-        <Button variant="secondary" icon="book" onClick={()=>{setNovelOpen(true);setNovelMessage("");}} disabled={role==="reader"}>Add novel title</Button>
-        <Button icon="upload" onClick={()=>fileRef.current?.click()} disabled={role==="reader"}>{uploading ? "Uploading…" : "Upload new PDF"}</Button>
-      </div>
-    </div>
-    {uploadMessage && <div className="upload-message">{uploadMessage}</div>}
-    {role==="reader" && <div className="upload-message permission-message"><strong>Reader access only.</strong> Your current account is a Reader. Content management requires the Editor or Admin role.</div>}
-    {novelMessage && !novelOpen && <div className="upload-message">{novelMessage}</div>}
-    {novelOpen && <div className="modal-backdrop" role="presentation" onMouseDown={()=>!novelSaving && setNovelOpen(false)}><section className="auth-modal novel-modal" role="dialog" aria-modal="true" onMouseDown={(e)=>e.stopPropagation()}>
-      <button type="button" className="modal-close" onClick={()=>!novelSaving && setNovelOpen(false)} aria-label="Close">×</button>
-      <div className="auth-brand"><span className="logo-mark">L</span><div><strong>Add novel title</strong><small>Create a new series and its first volume.</small></div></div>
-      <div className="novel-form-grid">
-        <label>Title<input value={novelTitle} onChange={(e)=>setNovelTitle(e.target.value)} placeholder="The Name of the Novel" autoFocus/></label>
-        <label>Alternate title<input value={novelAlternateTitle} onChange={(e)=>setNovelAlternateTitle(e.target.value)} placeholder="Japanese / original title"/></label>
-        <label>Author<input value={novelAuthor} onChange={(e)=>setNovelAuthor(e.target.value)} placeholder="Author name"/></label>
-        <label>Language<input value={novelLanguage} onChange={(e)=>setNovelLanguage(e.target.value)} placeholder="en"/></label>
-        <label>Genres<input value={novelGenres} onChange={(e)=>setNovelGenres(e.target.value)} placeholder="Fantasy, Adventure, Romance"/></label>
-        <label>First volume number<input type="number" min="1" value={novelVolumeNumber} onChange={(e)=>{setNovelVolumeNumber(e.target.value); if(!novelVolumeTitle || /^Volume \d+$/.test(novelVolumeTitle)) setNovelVolumeTitle("Volume " + e.target.value)}}/></label>
-        <label>Volume title<input value={novelVolumeTitle} onChange={(e)=>setNovelVolumeTitle(e.target.value)} placeholder="Volume 1"/></label>
-        <label>Volume subtitle<input value={novelVolumeSubtitle} onChange={(e)=>setNovelVolumeSubtitle(e.target.value)} placeholder="Optional subtitle"/></label>
-      </div>
-      <label>Description<textarea value={novelDescription} onChange={(e)=>setNovelDescription(e.target.value)} placeholder="Short spoiler-safe description..." rows={4}/></label>
-      {novelMessage && <div className="auth-message">{novelMessage}</div>}
-      <button type="button" className="btn btn-primary auth-submit" onClick={()=>void handleCreateNovel()} disabled={novelSaving || role==="reader"}>{novelSaving ? "Creating…" : "Create draft novel"}</button>
-      <small className="auth-note">The title starts as Draft. Upload and process a PDF from AI Studio before publishing it.</small>
-    </section></div>}
-    <div className="job-summary"><img src={selectedNovel?.cover_path ?? photos.castle} alt="Volume cover"/><div className="job-title"><span className="processing-badge"><i></i> {(job?.status ?? "idle").toUpperCase()}</span><h2>{selectedNovel?.title ?? "Select a volume"}</h2><p>{selectedVolume ? "Volume " + selectedVolume.volume_number + " · " + (selectedVolume.subtitle ?? selectedVolume.title) : "Choose a volume above"}</p></div><div className="job-stat"><span>Overall progress</span><strong>{Math.round(Number(job?.progress_percent ?? 0))}%</strong><div className="progress"><i style={{width:(Math.round(Number(job?.progress_percent ?? 0)) + "%")}}></i></div><small>{job?.current_stage ?? "No processing job yet"}</small></div><div className="job-stat"><span>Job</span><strong>{job ? job.id.slice(0,8) : "—"}</strong><small>{job?.started_at ? "Started " + new Date(job.started_at).toLocaleTimeString() : "Upload a PDF to create one"}</small></div><Button variant="secondary" onClick={()=>void refreshJob()}>{job ? "Refresh" : "Check status"}</Button></div>
-    {job?.error_message && <div className="upload-message">{job.error_message}</div>}
-    <div className="admin-layout">
-      <section className="pipeline-card"><div className="card-head"><div><span>LIVE PIPELINE</span><h2>AI processing stages</h2></div><span className="live"><i></i> Live</span></div>
-        <div className="pipeline">{(jobStages.length ? jobStages : stages.map((stage,i)=>({id:"placeholder-"+i,stage_order:i+1,stage_key:stage.toLowerCase().replace(/ /g,"_"),status:"waiting" as const,progress_percent:0,job_id:"",started_at:null,finished_at:null,error_message:null,metadata:{}}))).map((stage,i)=>{ const label=stage.stage_key.replace(/_/g," "); return <button type="button" key={stage.id} className={(stage.status==="completed"?"done ":"")+(stage.status==="running"?"current ":"")+(selectedStage===i?"selected":"")} onClick={()=>setSelectedStage(i)}><span className="stage-icon">{stage.status==="completed"?<Icon name="check" size={15}/>:stage.status==="running"?<Icon name="sparkles" size={16}/>:stage.status==="failed"?<Icon name="close" size={15}/>:i+1}</span><div><strong>{label}</strong><small>{stage.status === "waiting" ? "Waiting" : stage.status === "running" ? "Running" : stage.status === "completed" ? "Completed" : stage.status === "failed" ? "Failed" : "Skipped"}</small></div>{stage.status==="running"&&<em>{Math.round(Number(stage.progress_percent))}%</em>}</button>; })}</div>
-      </section>
-      <section className="console-card"><div className="card-head"><div><span>PROCESSING CONSOLE</span><h2>Live activity</h2></div><div><button type="button">Auto-scroll</button><Button variant="icon" icon="more" label="Console options"/></div></div>
-        <div className="console">{jobLogs.length ? jobLogs.map((log)=><p key={log.id}><time>{new Date(log.created_at).toLocaleTimeString()}</time><span className={log.level}>{log.level.toUpperCase()}</span> {log.message}</p>) : <div className="result-placeholder"><Icon name="clock"/><strong>No live logs yet.</strong><p>Logs from the worker will appear here.</p></div>}</div>
-        <div className="quality-grid"><div><span>Current stage</span><strong>{job?.current_stage ?? "—"}</strong><small>{job?.status ?? "No job"}</small></div><div><span>Progress</span><strong>{Math.round(Number(job?.progress_percent ?? 0))}%</strong><small>{job?.file_size_bytes ? (job.file_size_bytes / 1024 / 1024).toFixed(1) + " MB input" : "—"}</small></div><div><span>Warnings / errors</span><strong>{jobLogs.filter((log)=>log.level==="warn"||log.level==="error").length}</strong><small className="good">{job?.error_message ? "Needs attention" : "Tracking"}</small></div></div>
-      </section>
-    </div>
-    <section className="review-strip"><div><Icon name="sparkles"/><span>UP NEXT</span><h2>{job?.status === "failed" ? "Processing failed" : "Human review"}</h2><p>{job?.status === "failed" ? (job.error_message ?? "The worker reported an error.") : "Review becomes actionable after the live ingestion stages finish."}</p></div><div className="review-preview"><div className="pdf-mini">PDF<span>{selectedVolume?.page_count ?? "—"}</span></div><Icon name="arrow"/><div className="web-mini"><span></span><span></span><span></span></div></div><Button variant="secondary" onClick={()=>void refreshJob()}>{job ? "Refresh job" : "Check job"} <Icon name="arrow"/></Button></section>
+    <div className="admin-head"><div><span className="eyebrow">CONTENT OPERATIONS</span><h1>AI Studio</h1><p>One workspace for novels, volumes, PDF ingestion, human review, and publishing.</p></div><div className="admin-upload-actions">
+      <select aria-label="Select novel" value={selectedNovelId} onChange={e=>{setSelectedNovelId(e.target.value);const v=novels.find(n=>n.id===e.target.value)?.volumes[0];if(v)setSelectedVolumeId(v.id);}}>{novels.length?novels.map(n=><option key={n.id} value={n.id}>{n.title+" · "+(n.publication_status??"published")}</option>):<option value="">No titles</option>}</select>
+      <select aria-label="Select volume" value={selectedVolumeId} onChange={e=>setSelectedVolumeId(e.target.value)}>{volumes.length?volumes.map(v=><option key={v.id} value={v.id}>{v.novelTitle+" · Vol. "+v.volume_number+" · "+(v.publication_status??"draft")}</option>):<option value="">No volumes</option>}</select>
+      <Button variant="secondary" icon="book" onClick={()=>{setNovelOpen(true);setMessage("");}} disabled={!canManage}>Add novel</Button>
+      <Button variant="secondary" onClick={()=>{if(selectedRealNovel){const n=(selectedRealNovel.volumes.at(-1)?.volume_number??0)+1;setVolNumber(String(n));setVolTitle("Volume "+n);setVolSubtitle("");setVolDescription("");setVolumeOpen(true);}}} disabled={!canManage||!selectedRealNovel}>Add volume</Button>
+      <input ref={fileRef} type="file" accept="application/pdf,.pdf" hidden onChange={e=>{void handlePdf(e.target.files?.[0]);e.currentTarget.value="";}}/><Button icon="upload" onClick={()=>fileRef.current?.click()} disabled={!canManage||uploading||!selectedVolumeId}>{uploading?"Uploading…":"Upload PDF"}</Button>
+    </div></div>
+    {!user&&<div className="upload-message">Sign in to access content operations.</div>}{user&&role==="reader"&&<div className="upload-message permission-message"><strong>Reader access only.</strong> Content management requires the Editor or Admin role.</div>}{message&&<div className="upload-message">{message}</div>}
+    <div className="job-summary"><img src={selectedRealNovel?.cover_path??photos.castle} alt="Novel cover"/><div className="job-title"><span className="processing-badge"><i></i>{String(job?.status??selectedVolume?.publication_status??"idle").toUpperCase()}</span><h2>{selectedRealNovel?.title??"Select a novel"}</h2><p>{selectedVolume?"Vol. "+selectedVolume.volume_number+" · "+(selectedVolume.subtitle||selectedVolume.title):"Choose a volume"}</p></div><div className="job-stat"><span>Pages</span><strong>{review?.page_count??selectedVolume?.page_count??"—"}</strong><small>{review?.chapters.length??selectedVolume?.chapters.length??0} chapters</small></div><div className="job-stat"><span>AI index</span><strong>{review?.chunk_count??"—"}</strong><small>{review?review.character_count+" characters · "+review.glossary_count+" glossary":"Run ingestion to generate it"}</small></div><Button variant="secondary" onClick={()=>{void refreshJob();void refreshReview();}}>Refresh</Button></div>
+    <section className="management-grid">
+      <div className="management-card"><div className="card-head"><div><span>NOVEL METADATA</span><h2>Edit title</h2></div></div>{selectedRealNovel?<><label>Title<input value={editTitle} onChange={e=>setEditTitle(e.target.value)}/></label><label>Alternate title<input value={editAlt} onChange={e=>setEditAlt(e.target.value)}/></label><label>Author<input value={editAuthor} onChange={e=>setEditAuthor(e.target.value)}/></label><label>Description<textarea rows={4} value={editDescription} onChange={e=>setEditDescription(e.target.value)}/></label><label>Genres<input value={editGenres} onChange={e=>setEditGenres(e.target.value)}/></label><div className="inline-form-row"><label>Language<input value={editLanguage} onChange={e=>setEditLanguage(e.target.value)}/></label><label className="check-field"><input type="checkbox" checked={editFeatured} onChange={e=>setEditFeatured(e.target.checked)}/> Featured</label></div><Button onClick={()=>void saveNovel()} disabled={!canManage||saving}>{saving?"Saving…":"Save novel metadata"}</Button></>:<div className="result-placeholder"><strong>Select a novel</strong></div>}</div>
+      <div className="management-card"><div className="card-head"><div><span>COVER</span><h2>Series artwork</h2></div></div><img className="management-cover" src={selectedRealNovel?.cover_path??photos.castle} alt="Selected cover"/><input ref={coverRef} type="file" accept="image/*" onChange={e=>setCoverFile(e.target.files?.[0]??null)} disabled={!canManage}/><Button variant="secondary" onClick={()=>void handleCover()} disabled={!canManage||!coverFile||coverUploading}>{coverUploading?"Uploading…":"Upload cover"}</Button></div>
+      <div className="management-card"><div className="card-head"><div><span>VOLUME METADATA</span><h2>Edit selected volume</h2></div></div>{selectedVolume?<><div className="inline-form-row"><label>Number<input type="number" min="1" value={volNumber} onChange={e=>setVolNumber(e.target.value)}/></label><label>Title<input value={volTitle} onChange={e=>setVolTitle(e.target.value)}/></label></div><label>Subtitle<input value={volSubtitle} onChange={e=>setVolSubtitle(e.target.value)}/></label><label>Description<textarea rows={3} value={volDescription} onChange={e=>setVolDescription(e.target.value)}/></label><Button onClick={()=>void saveVolume()} disabled={!canManage||volumeSaving}>{volumeSaving?"Saving…":"Save volume metadata"}</Button></>:<div className="result-placeholder"><strong>Select a volume</strong></div>}</div>
+    </section>
+    <div className="admin-layout"><section className="pipeline-card"><div className="card-head"><div><span>LIVE PIPELINE</span><h2>AI processing stages</h2></div><div>{job&&(job.status==="failed"||job.status==="cancelled")&&<Button variant="secondary" onClick={()=>void retryJob()}>Retry</Button>}</div></div><div className="pipeline">{(jobStages.length?jobStages:stages.map((stage,i)=>({id:"placeholder-"+i,stage_order:i+1,stage_key:stage.toLowerCase().replace(/ /g,"_"),status:"waiting" as const,progress_percent:0,job_id:"",started_at:null,finished_at:null,error_message:null,metadata:{}}))).map((stage,i)=><button type="button" key={stage.id} className={(stage.status==="completed"?"done ":"")+(stage.status==="running"?"current ":"")} onClick={()=>undefined}><span className="stage-icon">{stage.status==="completed"?<Icon name="check" size={15}/>:stage.status==="running"?<Icon name="sparkles" size={16}/>:stage.status==="failed"?<Icon name="close" size={15}/>:i+1}</span><div><strong>{stage.stage_key.replace(/_/g," ")}</strong><small>{stage.status==="waiting"?"Waiting":stage.status==="running"?"Running":stage.status==="completed"?"Completed":stage.status==="failed"?"Failed":"Skipped"}</small></div>{stage.status==="running"&&<em>{Math.round(Number(stage.progress_percent))}%</em>}</button>)}</div><div className="pipeline-footer"><span>{job?.current_stage??"No active job"}</span><b>{Math.round(Number(job?.progress_percent??0))}%</b><div className="progress"><i style={{width:(Math.round(Number(job?.progress_percent??0))+"%")}}></i></div></div></section>
+      <section className="console-card"><div className="card-head"><div><span>PROCESSING CONSOLE</span><h2>Live activity</h2></div></div><div className="console">{jobLogs.length?jobLogs.map(log=><p key={log.id}><time>{new Date(log.created_at).toLocaleTimeString()}</time><span className={log.level}>{log.level.toUpperCase()}</span> {log.message}</p>):<div className="result-placeholder"><Icon name="clock"/><strong>No job logs yet.</strong><p>Upload a PDF to start ingestion.</p></div>}</div><div className="quality-grid"><div><span>Warnings / errors</span><strong>{jobLogs.filter(l=>l.level==="warn"||l.level==="error").length}</strong><small>{job?.error_message??"None"}</small></div><div><span>Status</span><strong>{String(job?.status??"idle").toUpperCase()}</strong><small>{job?.current_stage??"—"}</small></div><div><span>Publish</span><strong>{canPublish?"READY":"BLOCKED"}</strong><small>{canPublish?"Review checks passed":"Needs extracted pages + review state"}</small></div></div></section></div>
+    <section className="review-workspace"><div className="review-head"><div><span>HUMAN REVIEW</span><h2>Review before publishing</h2><p>Edit AI-generated chapter titles and spoiler-safe summaries. Publishing remains explicit.</p></div><Button variant="primary" onClick={()=>void handlePublish()} disabled={!canPublish||saving}>{saving?"Publishing…":"Publish volume"} <Icon name="arrow"/></Button></div><div className="review-stats"><div><span>Extracted pages</span><strong>{review?.page_count??0}</strong></div><div><span>Chunks</span><strong>{review?.chunk_count??0}</strong></div><div><span>Characters</span><strong>{review?.character_count??0}</strong></div><div><span>Glossary</span><strong>{review?.glossary_count??0}</strong></div></div><div className="chapter-review-list">{review?.chapters.length?review.chapters.map(c=><div className="chapter-review-row" key={c.id}><div className="chapter-review-index">{String(c.chapter_number).padStart(2,"0")}</div><div className="chapter-review-fields"><label>Chapter title<input value={chapterDrafts[c.id]?.title??c.title} onChange={e=>setChapterDrafts(prev=>({...prev,[c.id]:{title:e.target.value,summary:prev[c.id]?.summary??c.summary??""}}))}/></label><label>Safe summary<textarea rows={3} value={chapterDrafts[c.id]?.summary??c.summary??""} onChange={e=>setChapterDrafts(prev=>({...prev,[c.id]:{title:prev[c.id]?.title??c.title,summary:e.target.value}}))}/></label></div><div className="chapter-review-actions"><span>{c.word_count??0} words</span><Button variant="secondary" onClick={()=>void saveChapter(c.id)} disabled={!canManage}>Save</Button></div></div>):<div className="result-placeholder"><Icon name="sparkles"/><strong>No review data yet.</strong><p>Upload and process a PDF to populate chapters.</p></div>}</div></section>
+    {novelOpen&&<div className="modal-backdrop" role="presentation" onMouseDown={()=>!novelSaving&&setNovelOpen(false)}><section className="auth-modal novel-modal" role="dialog" aria-modal="true" onMouseDown={e=>e.stopPropagation()}><button type="button" className="modal-close" onClick={()=>!novelSaving&&setNovelOpen(false)} aria-label="Close">×</button><div className="auth-brand"><span className="logo-mark">L</span><div><strong>Add novel title</strong><small>Create the series and its first volume.</small></div></div><div className="novel-form-grid"><label>Title<input value={novelTitle} onChange={e=>setNovelTitle(e.target.value)} autoFocus/></label><label>Alternate title<input value={novelAlternateTitle} onChange={e=>setNovelAlternateTitle(e.target.value)}/></label><label>Author<input value={novelAuthor} onChange={e=>setNovelAuthor(e.target.value)}/></label><label>Language<input value={novelLanguage} onChange={e=>setNovelLanguage(e.target.value)}/></label><label>Genres<input value={novelGenres} onChange={e=>setNovelGenres(e.target.value)}/></label><label>First volume number<input type="number" min="1" value={novelVolumeNumber} onChange={e=>{setNovelVolumeNumber(e.target.value);if(!novelVolumeTitle||/^Volume \d+$/.test(novelVolumeTitle))setNovelVolumeTitle("Volume "+e.target.value)}}/></div><label>Volume title<input value={novelVolumeTitle} onChange={e=>setNovelVolumeTitle(e.target.value)}/></label><label>Volume subtitle<input value={novelVolumeSubtitle} onChange={e=>setNovelVolumeSubtitle(e.target.value)}/></label><label>Description<textarea rows={4} value={novelDescription} onChange={e=>setNovelDescription(e.target.value)}/></label>{novelSaving?null:novelSaving}{message&&<div className="auth-message">{message}</div>}<button type="button" className="btn btn-primary auth-submit" onClick={()=>void handleCreateNovel()} disabled={!canManage||novelSaving}>{novelSaving?"Creating…":"Create draft novel"}</button></section></div>}
+    {volumeOpen&&<div className="modal-backdrop" role="presentation" onMouseDown={()=>!volumeSaving&&setVolumeOpen(false)}><section className="auth-modal novel-modal" role="dialog" aria-modal="true" onMouseDown={e=>e.stopPropagation()}><button type="button" className="modal-close" onClick={()=>!volumeSaving&&setVolumeOpen(false)} aria-label="Close">×</button><div className="auth-brand"><span className="logo-mark">L</span><div><strong>Add volume</strong><small>Attach another volume to the selected novel.</small></div></div><label>Volume number<input type="number" min="1" value={volNumber} onChange={e=>setVolNumber(e.target.value)}/></label><label>Title<input value={volTitle} onChange={e=>setVolTitle(e.target.value)}/></label><label>Subtitle<input value={volSubtitle} onChange={e=>setVolSubtitle(e.target.value)}/></label><label>Description<textarea rows={4} value={volDescription} onChange={e=>setVolDescription(e.target.value)}/></label>{message&&<div className="auth-message">{message}</div>}<button type="button" className="btn btn-primary auth-submit" onClick={()=>void handleCreateVolume()} disabled={!canManage||volumeSaving}>{volumeSaving?"Creating…":"Create draft volume"}</button></section></div>}
   </main>;
 }
-
 
 function LibraryView({ user, progress, bookmarks, onAuth, catalog, onRead }: { user: User | null; progress: Map<string, number>; bookmarks: UserBookmark[]; onAuth: () => void; catalog: CatalogBook[]; onRead: (target: { volumeId: string; chapterId: string | null }) => void }) {
   if (!user) return <main className="page"><section className="empty-state"><div className="library-icon">◫</div><h1>Your library</h1><p>Sign in to sync reading progress and bookmarks across devices.</p><Button onClick={onAuth}>Sign in to continue</Button></section></main>;
@@ -591,6 +325,17 @@ function LibraryView({ user, progress, bookmarks, onAuth, catalog, onRead }: { u
     display: books.find((item) => item.novelSlug === book.slug),
   })).filter((item) => item.display && item.volume);
   return <main className="page library-page"><div className="search-intro"><span className="hero-kicker dark">YOUR LIBRARY</span><h1>Everything you’re reading.</h1><p>Your reading activity is synced with your Lumen account.</p></div><section><div className="section-heading"><div><span>YOUR TITLES</span><h2>Recent library</h2></div></div>{displayBooks.length ? <div className="book-grid">{displayBooks.map(({book,volume,display}) => <article className="book-card" key={book.id} onClick={()=>onRead({volumeId:volume!.id, chapterId:volume!.chapters[0]?.id ?? null})}><div className="cover-wrap"><img src={display!.image} alt={`Cover of ${book.title}`} /><span className="cover-volume">Vol. {volume!.volume_number}</span></div><div className="book-meta"><div className="rating"><Icon name="star" size={14}/>{display!.rating}</div><span>{book.genres[0] ?? "Novel"}</span></div><h3>{book.title}</h3><p>{book.alternate_title ?? ""}</p><small>{book.author ?? "Unknown author"} · {Math.round(progress.get(volume!.id) ?? 0)}% synced</small></article>)}</div> : <div className="result-placeholder"><Icon name="library"/><strong>Your library is empty.</strong><p>Open a story and start reading; it will appear here automatically after progress sync.</p></div>}</section><section className="library-stats"><div><span>Bookmarks</span><strong>{bookmarks.length}</strong></div><div><span>Synced titles</span><strong>{displayBooks.length}</strong></div><div><span>Cloud sync</span><strong>Live</strong></div></section></main>;
+}
+function CommunityView({user,onAuth}:{user:User|null;onAuth:()=>void}){
+  const [posts,setPosts]=useState<CommunityPost[]>([]); const [content,setContent]=useState(""); const [loading,setLoading]=useState(true); const [message,setMessage]=useState(""); const [commentDrafts,setCommentDrafts]=useState<Record<string,string>>({});
+  async function refresh(){setLoading(true);try{setPosts(await fetchCommunityPosts());}catch(error){setMessage(error instanceof Error?error.message:"Community feed failed.");}finally{setLoading(false);}}
+  useEffect(()=>{void refresh();},[]);
+  async function submitPost(){if(!user){onAuth();return;}if(!content.trim())return;try{await createCommunityPost({userId:user.id,content});setContent("");await refresh();}catch(error){setMessage(error instanceof Error?error.message:"Could not publish post.");}}
+  async function submitComment(postId:string){if(!user){onAuth();return;}const text=commentDrafts[postId]?.trim();if(!text)return;try{await createCommunityComment({userId:user.id,postId,content:text});setCommentDrafts(prev=>({...prev,[postId]:""}));await refresh();}catch(error){setMessage(error instanceof Error?error.message:"Could not add comment.");}}
+  return <main className="page community-page"><div className="search-intro"><span className="hero-kicker dark"><Icon name="users" size={16}/> COMMUNITY</span><h1>Talk about the worlds you’re reading.</h1><p>Discuss chapters, characters, theories, and favorite moments.</p></div>
+    <section className="community-compose"><div className="avatar">{user?((user.user_metadata?.full_name as string|undefined)?.slice(0,2).toUpperCase()||"LR"):"LR"}</div><div><textarea rows={3} value={content} onChange={e=>setContent(e.target.value)} onFocus={()=>{if(!user)onAuth();}} placeholder={user?"Share a spoiler-safe thought…":"Sign in to start a discussion."}/><div className="community-compose-footer"><small>{content.length}/4000</small><Button onClick={()=>void submitPost()} disabled={!content.trim()}>Post</Button></div></div></section>
+    {message&&<div className="upload-message">{message}</div>}{loading?<div className="result-placeholder"><Icon name="clock"/><strong>Loading community…</strong></div>:<section className="community-feed">{posts.length?posts.map(post=><article className="community-post" key={post.id}><div className="community-post-head"><span className="avatar">{post.display_name.slice(0,2).toUpperCase()}</span><div><strong>{post.display_name}</strong><small>{new Date(post.created_at).toLocaleString()}{post.novel_title?" · "+post.novel_title:""}</small></div></div><p>{post.content}</p><div className="community-comments">{post.comments.map(comment=><div className="community-comment" key={comment.id}><strong>{comment.display_name}</strong><span>{comment.content}</span></div>)}</div><div className="community-comment-box"><input value={commentDrafts[post.id]??""} onChange={e=>setCommentDrafts(prev=>({...prev,[post.id]:e.target.value}))} onFocus={()=>{if(!user)onAuth();}} placeholder={user?"Write a comment…":"Sign in to comment"}/><Button variant="secondary" onClick={()=>void submitComment(post.id)} disabled={!commentDrafts[post.id]?.trim()}>Reply</Button></div></article>):<div className="result-placeholder"><Icon name="users"/><strong>No discussions yet.</strong><p>Be the first reader to start a conversation.</p></div>}</section>}
+  </main>;
 }
 
 function AuthDialog({ open, onClose, onSignedIn }: { open: boolean; onClose: () => void; onSignedIn: (user: User) => void }) {
@@ -694,5 +439,5 @@ export default function App() {
 
   async function handleSignOut() { await signOut(); setUser(null); setReaderTarget({volumeId:"",chapterId:null}); setView("home"); if (typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname + window.location.search); }
 
-  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView} catalog={catalog} progress={progress} onRead={(book)=>openReader({book})}/>} {view === "search" && <SearchView setView={setView} user={user} onAuth={() => setAuthOpen(true)} onRead={(target)=>openReader(target)}/>} {view === "admin" && <AdminView catalog={catalog} user={user} onAuth={() => setAuthOpen(true)} onCatalogChanged={refreshCatalog}/>} {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} catalog={catalog} onAuth={() => setAuthOpen(true)} onRead={openReader}/>}</div><BottomNav view={view} setView={(next)=> next === "reader" ? openReader() : setView(next)}/></div>{view === "reader" && <Reader setView={(next)=>{if(next !== "reader") { setView(next); if (typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname + window.location.search); }}} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null} volume={targetVolume} chapter={targetChapter} onSelectChapter={selectReaderChapter}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
+  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)} user={user}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView} catalog={catalog} progress={progress} onRead={(book)=>openReader({book})}/>} {view === "community" && <CommunityView user={user} onAuth={()=>setAuthOpen(true)}/>} {view === "search" && <SearchView setView={setView} user={user} onAuth={() => setAuthOpen(true)} onRead={(target)=>openReader(target)}/>} {view === "admin" && <AdminView catalog={catalog} user={user} onAuth={() => setAuthOpen(true)} onCatalogChanged={refreshCatalog}/>} {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} catalog={catalog} onAuth={() => setAuthOpen(true)} onRead={openReader}/>}</div><BottomNav view={view} setView={(next)=> next === "reader" ? openReader() : setView(next)}/></div>{view === "reader" && <Reader setView={(next)=>{if(next !== "reader") { setView(next); if (typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname + window.location.search); }}} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null} volume={targetVolume} chapter={targetChapter} onSelectChapter={selectReaderChapter}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
 }
