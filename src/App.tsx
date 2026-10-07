@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
-import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, signIn, signUp, signOut, toggleBookmark, type CatalogBook, type UserBookmark } from "./lib/lumen";
+import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, type CatalogBook, type UserBookmark } from "./lib/lumen";
 import { supabase } from "./lib/supabase";
 
 type View = "home" | "search" | "reader" | "admin" | "library";
@@ -200,8 +200,7 @@ function Reader({ setView, user, onAuth, syncVolumeId, syncChapterId }: { setVie
   async function persistProgress(nextPage: number) {
     if (!user || !syncVolumeId) return;
     const pct = Math.max(0, Math.min(100, (nextPage / 228) * 100));
-    const { error } = await import("./lib/lumen").then((m) => m.saveReadingProgress({ user, volumeId: syncVolumeId, chapterId: syncChapterId, pageNumber: nextPage, progressPercent: pct }));
-    if (error) console.debug(error);
+    try { await saveReadingProgress({ user, volumeId: syncVolumeId, chapterId: syncChapterId, pageNumber: nextPage, progressPercent: pct }); } catch (error) { console.debug(error); }
   }
   async function handleBookmark() {
     if (!user) { onAuth(); return; }
