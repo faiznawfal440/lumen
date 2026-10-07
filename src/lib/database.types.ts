@@ -286,6 +286,76 @@ export type Database = {
           },
         ]
       }
+      community_comments: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          post_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: string
+          post_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          post_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "community_comments_post_id_fkey"
+            columns: ["post_id"]
+            isOneToOne: false
+            referencedRelation: "community_posts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      community_posts: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          novel_id: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: string
+          novel_id?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          novel_id?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "community_posts_novel_id_fkey"
+            columns: ["novel_id"]
+            isOneToOne: false
+            referencedRelation: "novels"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       glossary_terms: {
         Row: {
           created_at: string
@@ -670,7 +740,28 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      match_lumen_chunks: {
+        Args: {
+          match_count?: number
+          match_threshold?: number
+          query_embedding: string
+        }
+        Returns: {
+          chapter_id: string
+          chapter_number: number
+          chapter_title: string
+          chunk_id: string
+          content: string
+          metadata: Json
+          novel_id: string
+          novel_slug: string
+          novel_title: string
+          similarity: number
+          volume_id: string
+          volume_number: number
+          volume_title: string
+        }[]
+      }
     }
     Enums: {
       processing_stage_status:
@@ -685,6 +776,7 @@ export type Database = {
         | "completed"
         | "failed"
         | "cancelled"
+        | "review"
       publication_status:
         | "draft"
         | "processing"
@@ -832,6 +924,7 @@ export const Constants = {
         "completed",
         "failed",
         "cancelled",
+        "review",
       ],
       publication_status: [
         "draft",
