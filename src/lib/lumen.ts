@@ -84,6 +84,7 @@ export async function uploadVolumePdf(args:{user:User;volumeId:string;file:File}
       input_path: path,
       status: "queued",
       created_by: args.user.id,
+      file_size_bytes: args.file.size,
     })
     .select("id")
     .single();
