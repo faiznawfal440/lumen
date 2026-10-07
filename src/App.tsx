@@ -18,7 +18,7 @@ const photos = {
   moon: "https://images.unsplash.com/photo-1642677674839-b9e5b94ea88c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixlib=rb-4.1.0&q=80&w=700",
 };
 
-type DisplayBook = { title:string; alt:string; author:string; image:string; rating:string; tag:string; volume:string; fresh:boolean };
+type DisplayBook = { title:string; alt:string; author:string; image:string; rating:string; tag:string; volume:string; fresh:boolean; novelSlug?:string; volumeId?:string; chapterId?:string; };
 let books: DisplayBook[] = [
   { title: "The Saint of Hollow Skies", alt: "Sora no Seijo", author: "Mina Kurosawa", image: photos.castle, rating: "4.9", tag: "Fantasy", volume: "Vol. 4", fresh: true },
   { title: "Asteria Academy", alt: "Mahō Gakuen Asteria", author: "Ren Ishikawa", image: photos.tower, rating: "4.8", tag: "Academy", volume: "Vol. 7", fresh: true },
@@ -38,6 +38,9 @@ function catalogToDisplayBooks(items: CatalogBook[]): DisplayBook[] {
       tag: book.genres[0] ?? "Novel",
       volume: volume ? `Vol. ${volume.volume_number}` : "Novel",
       fresh: Boolean(book.featured),
+      novelSlug: book.slug,
+      volumeId: volume?.id,
+      chapterId: volume?.chapters[0]?.id,
     };
   });
 }
@@ -119,9 +122,9 @@ function BottomNav({ view, setView }: { view: View; setView: (view: View) => voi
   </nav>;
 }
 
-function BookCard({ book, onRead }: { book: typeof books[number]; onRead: () => void }) {
-  return <article className="book-card" onClick={onRead}>
-    <div className="cover-wrap"><img src={book.image} alt={`Cover of ${book.title}`} /><span className="cover-volume">{book.volume}</span>{book.fresh && <span className="new-dot">NEW</span>}<button type="button" className="cover-play" aria-label={`Read ${book.title}`}><Icon name="play"/></button></div>
+function BookCard({ book, onRead }: { book: DisplayBook; onRead: (book: DisplayBook) => void }) {
+  return <article className="book-card" onClick={() => onRead(book)}>
+    <div className="cover-wrap"><img src={book.image} alt={`Cover of ${book.title}`} /><span className="cover-volume">{book.volume}</span>{book.fresh && <span className="new-dot">NEW</span>}<button type="button" className="cover-play" aria-label={`Read ${book.title}`} onClick={(e)=>{e.stopPropagation(); onRead(book);}}><Icon name="play"/></button></div>
     <div className="book-meta"><div className="rating"><Icon name="star" size={14}/>{book.rating}</div><span>{book.tag}</span></div>
     <h3>{book.title}</h3><p>{book.alt}</p><small>{book.author}</small>
   </article>;
@@ -131,7 +134,7 @@ function SectionHeading({ eyebrow, title, action }: { eyebrow?: string; title: s
   return <div className="section-heading"><div>{eyebrow && <span>{eyebrow}</span>}<h2>{title}</h2></div>{action && <Button variant="ghost">{action}<Icon name="arrow"/></Button>}</div>;
 }
 
-function Home({ setView }: { setView: (view: View) => void }) {
+function Home({ setView, catalog, progress, onRead }: { setView: (view: View) => void; catalog: CatalogBook[]; progress: Map<string, number>; onRead: (book: DisplayBook) => void }) {
   return <main className="page home-page">
     <section className="hero">
       <img src={photos.hero} alt="" />
@@ -140,23 +143,32 @@ function Home({ setView }: { setView: (view: View) => void }) {
         <span className="hero-kicker"><Icon name="sparkles" size={16}/> Editor’s selection</span>
         <h1>Every world begins<br/>with a single page.</h1>
         <p>Discover extraordinary light novels, enhanced with spoiler-safe AI and crafted for immersive reading.</p>
-        <div className="hero-actions"><Button onClick={() => setView("reader")} icon="play">Start reading</Button><Button variant="secondary" icon="compass" onClick={() => setView("search")}>Explore collection</Button></div>
+        <div className="hero-actions"><Button onClick={() => onRead(books[0])} icon="play">Start reading</Button><Button variant="secondary" icon="compass" onClick={() => setView("search")}>Explore collection</Button></div>
       </div>
       <div className="hero-feature"><span>FEATURED SERIES</span><strong>The Saint of Hollow Skies</strong><small>Volume 4 · The Palace Above the Clouds</small><div className="hero-stats"><span><Icon name="star" size={15}/> 4.9</span><span><Icon name="clock" size={15}/> 7h 20m</span></div></div>
     </section>
 
     <section className="continue-section">
       <SectionHeading eyebrow="YOUR JOURNEY" title="Continue reading" action="View history"/>
-      <article className="continue-card">
-        <img src={photos.tower} alt="Asteria Academy cover"/>
-        <div className="continue-info"><div><span className="status-pill">READING</span><small> Asteria Academy · Volume 3</small></div><h2>The Crownless Heir</h2><p>Chapter 7 — The Duel Beneath Violet Rain</p><div className="progress-row"><div className="progress"><i style={{width:"62%"}}></i></div><strong>62%</strong></div><div className="continue-footer"><span>Last read 2 hours ago · 2h 14m remaining</span><Button onClick={() => setView("reader")}>Resume chapter <Icon name="arrow"/></Button></div></div>
-        <div className="quote">“Magic remembers the shape of every promise.”</div>
-      </article>
+      {(() => {
+        const activeProgress = Array.from(progress.entries()).find(([, value]) => value > 0);
+        const volumeId = activeProgress?.[0];
+        const activeBook = catalog.find((book) => book.volumes.some((volume) => volume.id === volumeId)) ?? catalog[0];
+        const activeVolume = activeBook?.volumes.find((volume) => volume.id === volumeId) ?? activeBook?.volumes.at(-1);
+        const activeChapter = activeVolume?.chapters[0];
+        const display = books.find((book) => book.volumeId === activeVolume?.id) ?? books[0];
+        const pct = activeVolume ? Math.round(progress.get(activeVolume.id) ?? 0) : 0;
+        return <article className="continue-card">
+          <img src={display.image} alt={`Cover of ${activeBook?.title ?? display.title}`}/>
+          <div className="continue-info"><div><span className="status-pill">{pct > 0 ? "READING" : "READY"}</span><small> {activeBook?.title ?? display.title} · {activeVolume?.title ?? display.volume}</small></div><h2>{activeChapter?.title ?? "Choose your next chapter"}</h2><p>{activeChapter ? `Chapter ${activeChapter.chapter_number}` : "Explore the collection to start reading."}</p><div className="progress-row"><div className="progress"><i style={{width:`${pct}%`}}></i></div><strong>{pct}%</strong></div><div className="continue-footer"><span>{pct > 0 ? "Synced to your latest reading position" : "Your reading progress will appear here"}</span><Button onClick={() => activeVolume?.id && activeChapter?.id ? onRead({ ...display, title: activeBook?.title ?? display.title, volumeId: activeVolume.id, chapterId: activeChapter.id }) : setView("search")}>{pct > 0 ? "Resume chapter" : "Browse stories"} <Icon name="arrow"/></Button></div></div>
+          <div className="quote">“Every world begins with a single page.”</div>
+        </article>;
+      })()}
     </section>
 
     <section>
       <SectionHeading eyebrow="FRESH FROM THE ARCHIVE" title="Recently updated" action="See all updates"/>
-      <div className="book-grid">{books.map((book) => <BookCard key={book.title} book={book} onRead={() => setView("reader")}/>)}</div>
+      <div className="book-grid">{books.map((book) => <BookCard key={book.title} book={book} onRead={onRead}/>)}</div>
     </section>
 
     <section className="discovery-grid">
@@ -169,7 +181,7 @@ function Home({ setView }: { setView: (view: View) => void }) {
   </main>;
 }
 
-function SearchView({ setView, user, onAuth }: { setView: (view: View) => void; user: User | null; onAuth: () => void }) {
+function SearchView({ setView, user, onAuth, onRead }: { setView: (view: View) => void; user: User | null; onAuth: () => void; onRead: (target: { volumeId: string; chapterId: string | null }) => void }) {
   const [query, setQuery] = useState("momen duel sihir di festival akademi");
   const [results, setResults] = useState<SemanticSearchResult[]>([]);
   const [searched, setSearched] = useState(false);
@@ -203,7 +215,7 @@ function SearchView({ setView, user, onAuth }: { setView: (view: View) => void; 
       <section className="results"><div className="results-head"><div><span>BEST MATCHES</span><h2>Scenes matching your memory</h2></div><button type="button">Relevance <Icon name="chevron" size={15}/></button></div>
         {!searched && <div className="result-placeholder"><Icon name="sparkles"/><strong>Describe the scene you remember.</strong><p>Lumen will search indexed chapters by meaning instead of exact keywords.</p></div>}
         {searched && results.length === 0 && <div className="result-placeholder"><Icon name="search"/><strong>No semantic matches yet.</strong><p>Upload and process a volume in AI Studio to populate the scene index.</p></div>}
-        {results.map((r,i)=><article className="result-card" key={r.chapter_id}><div className="score-ring">{r.score}%</div><div className="result-body"><div className="result-label"><span>{r.chapter}</span><small>{r.book}</small></div><h3>{r.title}</h3><blockquote>“{r.excerpt}”</blockquote><div className="ai-reason"><Icon name="sparkles" size={17}/><p><strong>Why this matches</strong>{r.why}</p></div><div className="result-actions"><Button onClick={() => setView("reader")}>Jump to scene <Icon name="arrow"/></Button><Button variant="ghost" icon="bookmark">Save</Button></div></div><img src={books[i % books.length].image} alt="Novel cover"/></article>)}
+        {results.map((r,i)=><article className="result-card" key={r.chapter_id}><div className="score-ring">{r.score}%</div><div className="result-body"><div className="result-label"><span>{r.chapter}</span><small>{r.book}</small></div><h3>{r.title}</h3><blockquote>“{r.excerpt}”</blockquote><div className="ai-reason"><Icon name="sparkles" size={17}/><p><strong>Why this matches</strong>{r.why}</p></div><div className="result-actions"><Button onClick={() => onRead({ volumeId: r.volume_id, chapterId: r.chapter_id })}>Jump to scene <Icon name="arrow"/></Button><Button variant="ghost" icon="bookmark">Save</Button></div></div><img src={books[i % books.length].image} alt="Novel cover"/></article>)}
       </section>
     </div>
   </main>;
@@ -216,6 +228,7 @@ function Reader({
   syncChapterId,
   volume,
   chapter,
+  onSelectChapter,
 }: {
   setView: (view: View) => void;
   user: User | null;
@@ -224,6 +237,7 @@ function Reader({
   syncChapterId: string | null;
   volume: CatalogBook["volumes"][number] | undefined;
   chapter: CatalogBook["volumes"][number]["chapters"][number] | undefined;
+  onSelectChapter: (chapterId: string) => void;
 }) {
   const [theme, setTheme] = useState<"light"|"sepia"|"dark"|"amoled">("sepia");
   const [panel, setPanel] = useState<"toc"|"info"|null>("info");
@@ -233,8 +247,7 @@ function Reader({
   const [pageLoading, setPageLoading] = useState(false);
 
   const pageCount = Math.max(
-    volume?.page_count ?? 0,
-    chapter?.end_page ?? 0,
+    (chapter?.end_page ?? 0) - (chapter?.start_page ?? 0) + 1,
     pages.at(-1)?.page_number ?? 0,
     1
   );
@@ -377,7 +390,7 @@ function Reader({
           <div className="glossary"><strong>Chapter summary</strong><p>{chapter?.spoiler_safe_summary ?? "No spoiler-safe summary has been generated yet."}</p></div>
         </div> :
         <><h2>Table of contents</h2>{(volume?.chapters ?? []).map((item)=>(
-          <button type="button" className={item.id===syncChapterId?"chapter-link active":"chapter-link"} key={item.id} onClick={()=>setView("reader")}>
+          <button type="button" className={item.id===syncChapterId?"chapter-link active":"chapter-link"} key={item.id} onClick={()=>onSelectChapter(item.id)}>
             <span>{String(item.chapter_number).padStart(2,"0")}</span>{item.title}
             {item.id===syncChapterId&&<Icon name="check" size={15}/>}
           </button>
@@ -474,10 +487,15 @@ function AdminView({ catalog, user, onAuth }: { catalog: CatalogBook[]; user: Us
 }
 
 
-function LibraryView({ user, progress, bookmarks, onAuth }: { user: User | null; progress: Map<string, number>; bookmarks: UserBookmark[]; onAuth: () => void }) {
+function LibraryView({ user, progress, bookmarks, onAuth, catalog, onRead }: { user: User | null; progress: Map<string, number>; bookmarks: UserBookmark[]; onAuth: () => void; catalog: CatalogBook[]; onRead: (target: { volumeId: string; chapterId: string | null }) => void }) {
   if (!user) return <main className="page"><section className="empty-state"><div className="library-icon">◫</div><h1>Your library</h1><p>Sign in to sync reading progress and bookmarks across devices.</p><Button onClick={onAuth}>Sign in to continue</Button></section></main>;
-  const tracked = books.filter((book) => book.volume);
-  return <main className="page library-page"><div className="search-intro"><span className="hero-kicker dark">YOUR LIBRARY</span><h1>Everything you’re reading.</h1><p>Your reading activity is synced with your Lumen account.</p></div><section><div className="section-heading"><div><span>YOUR TITLES</span><h2>Recent library</h2></div></div><div className="book-grid">{tracked.map((book) => <article className="book-card" key={book.title}><div className="cover-wrap"><img src={book.image} alt={`Cover of ${book.title}`} /></div><div className="book-meta"><div className="rating"><Icon name="star" size={14}/>{book.rating}</div><span>{book.tag}</span></div><h3>{book.title}</h3><p>{book.alt}</p><small>{book.author} · {Math.round(progress.size ? Math.max(...progress.values()) : 0)}% synced</small></article>)}</div></section><section className="library-stats"><div><span>Bookmarks</span><strong>{bookmarks.length}</strong></div><div><span>Synced titles</span><strong>{tracked.length}</strong></div><div><span>Cloud sync</span><strong>Live</strong></div></section></main>;
+  const tracked = catalog.filter((book) => book.volumes.some((volume) => progress.has(volume.id)));
+  const displayBooks = tracked.map((book) => ({
+    book,
+    volume: book.volumes.find((volume) => progress.has(volume.id)) ?? book.volumes.at(-1),
+    display: books.find((item) => item.novelSlug === book.slug),
+  })).filter((item) => item.display && item.volume);
+  return <main className="page library-page"><div className="search-intro"><span className="hero-kicker dark">YOUR LIBRARY</span><h1>Everything you’re reading.</h1><p>Your reading activity is synced with your Lumen account.</p></div><section><div className="section-heading"><div><span>YOUR TITLES</span><h2>Recent library</h2></div></div>{displayBooks.length ? <div className="book-grid">{displayBooks.map(({book,volume,display}) => <article className="book-card" key={book.id} onClick={()=>onRead({volumeId:volume!.id, chapterId:volume!.chapters[0]?.id ?? null})}><div className="cover-wrap"><img src={display!.image} alt={`Cover of ${book.title}`} /><span className="cover-volume">Vol. {volume!.volume_number}</span></div><div className="book-meta"><div className="rating"><Icon name="star" size={14}/>{display!.rating}</div><span>{book.genres[0] ?? "Novel"}</span></div><h3>{book.title}</h3><p>{book.alternate_title ?? ""}</p><small>{book.author ?? "Unknown author"} · {Math.round(progress.get(volume!.id) ?? 0)}% synced</small></article>)}</div> : <div className="result-placeholder"><Icon name="library"/><strong>Your library is empty.</strong><p>Open a story and start reading; it will appear here automatically after progress sync.</p></div>}</section><section className="library-stats"><div><span>Bookmarks</span><strong>{bookmarks.length}</strong></div><div><span>Synced titles</span><strong>{displayBooks.length}</strong></div><div><span>Cloud sync</span><strong>Live</strong></div></section></main>;
 }
 
 function AuthDialog({ open, onClose, onSignedIn }: { open: boolean; onClose: () => void; onSignedIn: (user: User) => void }) {
@@ -502,12 +520,16 @@ function AuthDialog({ open, onClose, onSignedIn }: { open: boolean; onClose: () 
 
 
 export default function App() {
-  const [view, setView] = useState<View>("home");
+  const initialReader = typeof window !== "undefined" && window.location.hash.startsWith("#reader?") ? new URLSearchParams(window.location.hash.slice(8)) : null;
+  const [view, setView] = useState<View>(initialReader ? "reader" : "home");
   const [user, setUser] = useState<User | null>(null);
   const [catalog, setCatalog] = useState<CatalogBook[]>([]);
   const [progress, setProgress] = useState<Map<string, number>>(new Map());
   const [bookmarks, setBookmarks] = useState<UserBookmark[]>([]);
   const [authOpen, setAuthOpen] = useState(false);
+  const [readerTarget, setReaderTarget] = useState<{volumeId:string; chapterId:string|null}>(
+    initialReader?.get("volume") ? { volumeId: initialReader.get("volume")!, chapterId: initialReader.get("chapter") } : { volumeId: "", chapterId: null }
+  );
   const [, forceCatalogRefresh] = useState(0);
 
   useEffect(() => {
@@ -528,14 +550,44 @@ export default function App() {
     Promise.all([fetchUserProgress(user.id), fetchUserBookmarks(user.id)]).then(([items, saved]) => {
       setProgress(new Map(items.map((item) => [item.volume_id, Number(item.progress_percent)])));
       setBookmarks(saved);
+      if (!readerTarget.volumeId && items[0]?.volume_id) {
+        setReaderTarget({ volumeId: items[0].volume_id, chapterId: items[0].chapter_id });
+      }
     }).catch(() => undefined);
   }, [user]);
 
-  const targetBook = catalog.find((book) => book.slug === "asteria-academy") ?? catalog.find((book) => book.featured) ?? catalog[0];
-  const targetVolume = targetBook?.volumes.at(-1);
-  const targetChapter = targetVolume?.chapters[0];
+  function openReader(target?: { volumeId?: string | null; chapterId?: string | null; book?: DisplayBook }) {
+    const volumeId = target?.volumeId ?? target?.book?.volumeId;
+    const chapterId = target?.chapterId ?? target?.book?.chapterId ?? null;
+    const fallbackVolume = catalog.find((book) => book.volumes.some((volume) => progress.has(volume.id)))?.volumes.find((volume) => progress.has(volume.id))
+      ?? catalog.find((book) => book.featured)?.volumes.at(-1)
+      ?? catalog[0]?.volumes.at(-1);
+    const finalVolumeId = volumeId ?? fallbackVolume?.id ?? "";
+    const finalChapterId = chapterId ?? fallbackVolume?.chapters[0]?.id ?? null;
+    if (!finalVolumeId) { setView("search"); return; }
+    setReaderTarget({ volumeId: finalVolumeId, chapterId: finalChapterId });
+    setView("reader");
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams({ volume: finalVolumeId });
+      if (finalChapterId) params.set("chapter", finalChapterId);
+      window.history.replaceState(null, "", `#reader?${params.toString()}`);
+    }
+  }
 
-  async function handleSignOut() { await signOut(); setUser(null); setView("home"); }
+  const targetBook = catalog.find((book) => book.volumes.some((volume) => volume.id === readerTarget.volumeId));
+  const targetVolume = targetBook?.volumes.find((volume) => volume.id === readerTarget.volumeId) ?? targetBook?.volumes.at(-1);
+  const targetChapter = targetVolume?.chapters.find((chapter) => chapter.id === readerTarget.chapterId) ?? targetVolume?.chapters[0];
 
-  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView}/>} {view === "search" && <SearchView setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>} {view === "admin" && <AdminView catalog={catalog} user={user} onAuth={() => setAuthOpen(true)}/>}  {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} onAuth={() => setAuthOpen(true)}/>}</div><BottomNav view={view} setView={setView}/></div>{view === "reader" && <Reader setView={setView} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null} volume={targetVolume} chapter={targetChapter}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
+  function selectReaderChapter(chapterId:string) {
+    if (!targetVolume) return;
+    setReaderTarget({ volumeId: targetVolume.id, chapterId });
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams({ volume: targetVolume.id, chapter: chapterId });
+      window.history.replaceState(null, "", `#reader?${params.toString()}`);
+    }
+  }
+
+  async function handleSignOut() { await signOut(); setUser(null); setReaderTarget({volumeId:"",chapterId:null}); setView("home"); if (typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname + window.location.search); }
+
+  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView} catalog={catalog} progress={progress} onRead={(book)=>openReader({book})}/>} {view === "search" && <SearchView setView={setView} user={user} onAuth={() => setAuthOpen(true)} onRead={(target)=>openReader(target)}/>} {view === "admin" && <AdminView catalog={catalog} user={user} onAuth={() => setAuthOpen(true)}/>} {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} catalog={catalog} onAuth={() => setAuthOpen(true)} onRead={openReader}/>}</div><BottomNav view={view} setView={(next)=> next === "reader" ? openReader() : setView(next)}/></div>{view === "reader" && <Reader setView={(next)=>{if(next !== "reader") { setView(next); if (typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname + window.location.search); }}} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null} volume={targetVolume} chapter={targetChapter} onSelectChapter={selectReaderChapter}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
 }
