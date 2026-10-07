@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
-import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, semanticSearch, startProcessingJob, uploadVolumePdf, type CatalogBook, type UserBookmark, type SemanticSearchResult } from "./lib/lumen";
+import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, semanticSearch, startProcessingJob, uploadVolumePdf, fetchLatestProcessingJob, fetchProcessingStages, fetchProcessingLogs, type CatalogBook, type UserBookmark, type SemanticSearchResult, type ProcessingJob, type ProcessingStage, type ProcessingLog } from "./lib/lumen";
 import { supabase } from "./lib/supabase";
 
 type View = "home" | "search" | "reader" | "admin" | "library";
@@ -418,6 +418,9 @@ function AdminView({ catalog, user, onAuth }: { catalog: CatalogBook[]; user: Us
   const [selectedVolumeId, setSelectedVolumeId] = useState("");
   const [uploadMessage, setUploadMessage] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [job, setJob] = useState<ProcessingJob | null>(null);
+  const [jobStages, setJobStages] = useState<ProcessingStage[]>([]);
+  const [jobLogs, setJobLogs] = useState<ProcessingLog[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const volumes = catalog.flatMap((book) => book.volumes.map((volume) => ({
@@ -426,7 +429,34 @@ function AdminView({ catalog, user, onAuth }: { catalog: CatalogBook[]; user: Us
   })));
   useEffect(() => {
     if (!selectedVolumeId && volumes[0]?.id) setSelectedVolumeId(volumes[0].id);
-  }, [selectedVolumeId, volumes]);
+  }, [selectedVolumeId, catalog]);
+
+  async function refreshJob(volumeId = selectedVolumeId) {
+    if (!volumeId || !user) {
+      setJob(null); setJobStages([]); setJobLogs([]);
+      return;
+    }
+    try {
+      const nextJob = await fetchLatestProcessingJob(volumeId);
+      setJob(nextJob);
+      if (!nextJob) { setJobStages([]); setJobLogs([]); return; }
+      const [nextStages, nextLogs] = await Promise.all([
+        fetchProcessingStages(nextJob.id),
+        fetchProcessingLogs(nextJob.id),
+      ]);
+      setJobStages(nextStages);
+      setJobLogs(nextLogs);
+    } catch {
+      /* Keep the operations screen usable when policies are restrictive. */
+    }
+  }
+
+  useEffect(() => {
+    void refreshJob();
+    if (!selectedVolumeId || !user) return;
+    const interval = window.setInterval(() => void refreshJob(), 2500);
+    return () => window.clearInterval(interval);
+  }, [selectedVolumeId, user?.id]);
 
   const selectedVolume = volumes.find((volume) => volume.id === selectedVolumeId);
   const selectedNovel = catalog.find((book) => book.volumes.some((volume) => volume.id === selectedVolumeId));
@@ -443,10 +473,12 @@ function AdminView({ catalog, user, onAuth }: { catalog: CatalogBook[]; user: Us
       if (started.error) {
         setUploadMessage(`Job ${jobId.slice(0, 8)} created, but worker did not start: ${started.error.message}`);
       } else {
-        setUploadMessage("Processing started. OpenAI intake will move the job into Human review when the first pass completes.");
+        setUploadMessage("Processing started. This screen now follows the live job state.");
       }
+      await refreshJob(selectedVolumeId);
     } catch (error) {
       setUploadMessage(error instanceof Error ? error.message : "PDF upload failed.");
+      await refreshJob(selectedVolumeId);
     } finally {
       setUploading(false);
     }
@@ -464,25 +496,18 @@ function AdminView({ catalog, user, onAuth }: { catalog: CatalogBook[]; user: Us
       </div>
     </div>
     {uploadMessage && <div className="upload-message">{uploadMessage}</div>}
-    <div className="job-summary"><img src={selectedNovel?.cover_path ?? photos.castle} alt="Volume cover"/><div className="job-title"><span className="processing-badge"><i></i> PROCESSING</span><h2>{selectedNovel?.title ?? "Select a volume"}</h2><p>{selectedVolume ? `Volume ${selectedVolume.volume_number} · ${selectedVolume.subtitle ?? selectedVolume.title}` : "Choose a volume above"}</p></div><div className="job-stat"><span>Overall progress</span><strong>68%</strong><div className="progress"><i style={{width:"68%"}}></i></div></div><div className="job-stat"><span>Estimated remaining</span><strong>08:42</strong><small>Started 14 min ago</small></div><Button variant="secondary" icon="close">Cancel job</Button></div>
+    <div className="job-summary"><img src={selectedNovel?.cover_path ?? photos.castle} alt="Volume cover"/><div className="job-title"><span className="processing-badge"><i></i> {(job?.status ?? "idle").toUpperCase()}</span><h2>{selectedNovel?.title ?? "Select a volume"}</h2><p>{selectedVolume ? "Volume " + selectedVolume.volume_number + " · " + (selectedVolume.subtitle ?? selectedVolume.title) : "Choose a volume above"}</p></div><div className="job-stat"><span>Overall progress</span><strong>{Math.round(Number(job?.progress_percent ?? 0))}%</strong><div className="progress"><i style={{width:(Math.round(Number(job?.progress_percent ?? 0)) + "%")}}></i></div><small>{job?.current_stage ?? "No processing job yet"}</small></div><div className="job-stat"><span>Job</span><strong>{job ? job.id.slice(0,8) : "—"}</strong><small>{job?.started_at ? "Started " + new Date(job.started_at).toLocaleTimeString() : "Upload a PDF to create one"}</small></div><Button variant="secondary" onClick={()=>void refreshJob()}>{job ? "Refresh" : "Check status"}</Button></div>
+    {job?.error_message && <div className="upload-message">{job.error_message}</div>
     <div className="admin-layout">
       <section className="pipeline-card"><div className="card-head"><div><span>LIVE PIPELINE</span><h2>AI processing stages</h2></div><span className="live"><i></i> Live</span></div>
-        <div className="pipeline">{stages.map((stage,i)=><button type="button" key={stage} className={`${i<5?"done":i===5?"current":""} ${selectedStage===i?"selected":""}`} onClick={()=>setSelectedStage(i)}><span className="stage-icon">{i<5?<Icon name="check" size={15}/>:i===5?<Icon name="sparkles" size={16}/>:i+1}</span><div><strong>{stage}</strong><small>{i<5?"Completed":i===5?"Generating chapter summaries…":"Waiting"}</small></div>{i<5&&<b>{["00:08","04:21","00:47","01:12","02:34"][i]}</b>}{i===5&&<em>68%</em>}</button>)}</div>
+        <div className="pipeline">{(jobStages.length ? jobStages : stages.map((stage,i)=>({id:"placeholder-"+i,stage_order:i+1,stage_key:stage.toLowerCase().replaceAll(" ","_"),status:"waiting" as const,progress_percent:0,job_id:"",started_at:null,finished_at:null,error_message:null,metadata:{}}))).map((stage,i)=>{ const label=stage.stage_key.replaceAll("_"," "); return <button type="button" key={stage.id} className={(stage.status==="completed"?"done ":"")+(stage.status==="running"?"current ":"")+(selectedStage===i?"selected":"")} onClick={()=>setSelectedStage(i)}><span className="stage-icon">{stage.status==="completed"?<Icon name="check" size={15}/>:stage.status==="running"?<Icon name="sparkles" size={16}/>:stage.status==="failed"?<Icon name="close" size={15}/>:i+1}</span><div><strong>{label}</strong><small>{stage.status === "waiting" ? "Waiting" : stage.status === "running" ? "Running" : stage.status === "completed" ? "Completed" : stage.status === "failed" ? "Failed" : "Skipped"}</small></div>{stage.status==="running"&&<em>{Math.round(Number(stage.progress_percent))}%</em>}</button>; })}</div>
       </section>
       <section className="console-card"><div className="card-head"><div><span>PROCESSING CONSOLE</span><h2>Live activity</h2></div><div><button type="button">Auto-scroll</button><Button variant="icon" icon="more" label="Console options"/></div></div>
-        <div className="console">
-          <p><time>14:38:22</time><span className="info">INFO</span> Chapter 8 summary generated <b>confidence: 0.94</b></p>
-          <p><time>14:38:26</time><span className="info">INFO</span> Processing Chapter 9: “The Glass Observatory”</p>
-          <p><time>14:38:31</time><span className="ai">AI</span> Identified 4 key events and 7 character references</p>
-          <p><time>14:38:34</time><span className="warn">WARN</span> Low confidence paragraph boundary on page 184</p>
-          <p><time>14:38:37</time><span className="info">INFO</span> Applied contextual paragraph repair</p>
-          <p><time>14:38:41</time><span className="ai">AI</span> Generating spoiler-safe summary…</p>
-          <p className="typing"><time>14:38:48</time><span className="active">RUN</span> <i></i></p>
-        </div>
-        <div className="quality-grid"><div><span>Extraction confidence</span><strong>97.4%</strong><small className="good">Excellent</small></div><div><span>Pages processed</span><strong>218 / 324</strong><small>67.3%</small></div><div><span>Warnings</span><strong>3</strong><small className="warning">Review later</small></div></div>
+        <div className="console">{jobLogs.length ? jobLogs.map((log)=><p key={log.id}><time>{new Date(log.created_at).toLocaleTimeString()}</time><span className={log.level}>{log.level.toUpperCase()}</span> {log.message}</p>) : <div className="result-placeholder"><Icon name="clock"/><strong>No live logs yet.</strong><p>Logs from the worker will appear here.</p></div>}</div>
+        <div className="quality-grid"><div><span>Current stage</span><strong>{job?.current_stage ?? "—"}</strong><small>{job?.status ?? "No job"}</small></div><div><span>Progress</span><strong>{Math.round(Number(job?.progress_percent ?? 0))}%</strong><small>{job?.file_size_bytes ? (job.file_size_bytes / 1024 / 1024).toFixed(1) + " MB input" : "—"}</small></div><div><span>Warnings / errors</span><strong>{jobLogs.filter((log)=>log.level==="warn"||log.level==="error").length}</strong><small className="good">{job?.error_message ? "Needs attention" : "Tracking"}</small></div></div>
       </section>
     </div>
-    <section className="review-strip"><div><Icon name="sparkles"/><span>UP NEXT</span><h2>Human review</h2><p>Compare the original PDF with extracted web content and resolve 3 flagged formatting issues.</p></div><div className="review-preview"><div className="pdf-mini">PDF<span>184</span></div><Icon name="arrow"/><div className="web-mini"><span></span><span></span><span></span></div></div><Button variant="secondary">Open review workspace <Icon name="arrow"/></Button></section>
+    <section className="review-strip"><div><Icon name="sparkles"/><span>UP NEXT</span><h2>{job?.status === "failed" ? "Processing failed" : "Human review"}</h2><p>{job?.status === "failed" ? (job.error_message ?? "The worker reported an error.") : "Review becomes actionable after the live ingestion stages finish."}</p></div><div className="review-preview"><div className="pdf-mini">PDF<span>{selectedVolume?.page_count ?? "—"}</span></div><Icon name="arrow"/><div className="web-mini"><span></span><span></span><span></span></div></div><Button variant="secondary" onClick={()=>void refreshJob()}>{job ? "Refresh job" : "Check job"} <Icon name="arrow"/></Button></section>
   </main>;
 }
 
