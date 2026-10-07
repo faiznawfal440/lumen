@@ -267,7 +267,7 @@ export async function fetchCommunityPosts():Promise<CommunityPost[]> {
   if(profiles.error) throw profiles.error;if(novels.error) throw novels.error;if(comments.error) throw comments.error;
   const profileMap=new Map((profiles.data??[]).map((p:any)=>[p.id,p.display_name||p.username||"Lumen Reader"]));
   const novelMap=new Map((novels.data??[]).map((n:any)=>[n.id,n.title]));
-  const commentUserIds=Array.from(new Set((comments.data??[]).map((c:any)=>c.user_id).filter((id:any)=>!profileMap.has(id))));
+  const commentUserIds=Array.from(new Set((comments.data??[]).map((c:any)=>c.user_id).filter((id:any)=>!profileMap.has(id)))) as string[];
   if(commentUserIds.length){const extra=await supabase.from("profiles").select("id,display_name,username").in("id",commentUserIds);if(extra.error)throw extra.error;for(const p of extra.data??[])profileMap.set(p.id,p.display_name||p.username||"Lumen Reader");}
   const commentMap=new Map<string,CommunityComment[]>();
   for(const c of comments.data??[]){const row={...c,display_name:profileMap.get(c.user_id)||"Lumen Reader"} as CommunityComment;if(!commentMap.has(c.post_id))commentMap.set(c.post_id,[]);commentMap.get(c.post_id)!.push(row);}
