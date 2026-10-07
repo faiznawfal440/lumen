@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
-import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, startProcessingJob, uploadVolumePdf, type CatalogBook, type UserBookmark } from "./lib/lumen";
+import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, semanticSearch, startProcessingJob, uploadVolumePdf, type CatalogBook, type UserBookmark, type SemanticSearchResult } from "./lib/lumen";
 import { supabase } from "./lib/supabase";
 
 type View = "home" | "search" | "reader" | "admin" | "library";
@@ -169,25 +169,45 @@ function Home({ setView }: { setView: (view: View) => void }) {
   </main>;
 }
 
-function SearchView({ setView }: { setView: (view: View) => void }) {
+function SearchView({ setView, user, onAuth }: { setView: (view: View) => void; user: User | null; onAuth: () => void }) {
   const [query, setQuery] = useState("momen duel sihir di festival akademi");
+  const [results, setResults] = useState<SemanticSearchResult[]>([]);
+  const [searched, setSearched] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function runSearch() {
+    if (!user) { setMessage("Masuk dulu untuk memakai semantic search."); onAuth(); return; }
+    setLoading(true); setMessage("");
+    try {
+      const response = await semanticSearch({ query });
+      if (response.error) throw response.error;
+      const next = response.data?.results ?? [];
+      setResults(next);
+      setSearched(true);
+      if (!next.length) setMessage("Belum ada scene terindeks yang cocok. Proses volume terlebih dahulu di AI Studio.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Semantic search gagal.");
+      setResults([]);
+      setSearched(true);
+    } finally { setLoading(false); }
+  }
+
   return <main className="page search-page">
     <div className="search-intro"><span className="hero-kicker dark"><Icon name="sparkles" size={16}/> Lumen semantic search</span><h1>Find the moment you remember.</h1><p>Search by plot, mood, dialogue, or a scene you can’t quite name.</p></div>
-    <div className="semantic-box"><Icon name="sparkles"/><input aria-label="Semantic search query" value={query} onChange={(e) => setQuery(e.target.value)} /><Button>Search worlds</Button></div>
-    <div className="filter-row"><Button variant="secondary" icon="filter">All filters</Button>{["Academy","Magic duel","Festival","Rating 4.5+"].map(x=><button type="button" className="filter-chip" key={x}>{x}<Icon name="close" size={14}/></button>)}<span className="result-count">12 scenes found in 0.43s</span></div>
+    <div className="semantic-box"><Icon name="sparkles"/><input aria-label="Semantic search query" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e)=>{if(e.key==="Enter") void runSearch();}} /><Button onClick={()=>void runSearch()}>{loading ? "Searching…" : "Search worlds"}</Button></div>
+    {message && <div className="upload-message search-message">{message}</div>}
+    <div className="filter-row"><Button variant="secondary" icon="filter">All filters</Button>{["Academy","Magic duel","Festival","Rating 4.5+"].map(x=><button type="button" className="filter-chip" key={x}>{x}<Icon name="close" size={14}/></button>)}<span className="result-count">{searched ? `${results.length} semantic scenes found` : "Semantic search ready"}</span></div>
     <div className="results-layout">
       <aside className="search-filters"><h3>Refine results</h3>{["Content type","Genre","Publication status","Language","AI confidence"].map((x,i)=><div className="filter-block" key={x}><button type="button">{x}<span>{i===0?"Scenes":i===1?"Fantasy":"Any"}</span><Icon name="chevron" size={16}/></button></div>)}</aside>
       <section className="results"><div className="results-head"><div><span>BEST MATCHES</span><h2>Scenes matching your memory</h2></div><button type="button">Relevance <Icon name="chevron" size={15}/></button></div>
-        {[
-          {score:"96%", title:"The Duel Beneath Violet Rain", book:"Asteria Academy · Volume 3", chapter:"Chapter 7", text:"The academy courtyard vanished beneath a lattice of violet light. Kael raised his broken wand as the festival bells marked the final duel...", why:"Matches a magical duel during the Asteria Founding Festival, including the rain-like spell effect."},
-          {score:"89%", title:"When the Lanterns Turned Blue", book:"The Saint of Hollow Skies · Volume 2", chapter:"Chapter 11", text:"For one breathless moment, all six competitors stood within the glowing ring. Above them, paper lanterns drifted like captured stars...", why:"Contains an academy tournament and a ceremonial magic contest during a lantern festival."},
-          {score:"82%", title:"A Promise at Midwinter", book:"The Crownless Heir · Volume 1", chapter:"Chapter 15", text:"Snow gathered on the dueling field as the students formed a silent circle. This was no longer an exhibition match...", why:"Strong match for academy duel and festival setting, though the scene occurs during winter."}
-        ].map((r,i)=><article className="result-card" key={r.title}><div className="score-ring">{r.score}</div><div className="result-body"><div className="result-label"><span>{r.chapter}</span><small>{r.book}</small></div><h3>{r.title}</h3><blockquote>“{r.text}”</blockquote><div className="ai-reason"><Icon name="sparkles" size={17}/><p><strong>Why this matches</strong>{r.why}</p></div><div className="result-actions"><Button onClick={() => setView("reader")}>Jump to scene <Icon name="arrow"/></Button><Button variant="ghost" icon="bookmark">Save</Button></div></div><img src={books[i].image} alt="Novel cover"/></article>)}
+        {!searched && <div className="result-placeholder"><Icon name="sparkles"/><strong>Describe the scene you remember.</strong><p>Lumen will search indexed chapters by meaning instead of exact keywords.</p></div>}
+        {searched && results.length === 0 && <div className="result-placeholder"><Icon name="search"/><strong>No semantic matches yet.</strong><p>Upload and process a volume in AI Studio to populate the scene index.</p></div>}
+        {results.map((r,i)=><article className="result-card" key={r.chapter_id}><div className="score-ring">{r.score}%</div><div className="result-body"><div className="result-label"><span>{r.chapter}</span><small>{r.book}</small></div><h3>{r.title}</h3><blockquote>“{r.excerpt}”</blockquote><div className="ai-reason"><Icon name="sparkles" size={17}/><p><strong>Why this matches</strong>{r.why}</p></div><div className="result-actions"><Button onClick={() => setView("reader")}>Jump to scene <Icon name="arrow"/></Button><Button variant="ghost" icon="bookmark">Save</Button></div></div><img src={books[i % books.length].image} alt="Novel cover"/></article>)}
       </section>
     </div>
   </main>;
 }
-
 function Reader({ setView, user, onAuth, syncVolumeId, syncChapterId }: { setView: (view: View) => void; user: User | null; onAuth: () => void; syncVolumeId: string | null; syncChapterId: string | null }) {
   const [theme, setTheme] = useState<"light"|"sepia"|"dark"|"amoled">("sepia");
   const [panel, setPanel] = useState<"toc"|"info"|null>("info");
@@ -385,5 +405,5 @@ export default function App() {
 
   async function handleSignOut() { await signOut(); setUser(null); setView("home"); }
 
-  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView}/>} {view === "search" && <SearchView setView={setView}/>} {view === "admin" && <AdminView catalog={catalog} user={user} onAuth={() => setAuthOpen(true)}/>}  {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} onAuth={() => setAuthOpen(true)}/>}</div><BottomNav view={view} setView={setView}/></div>{view === "reader" && <Reader setView={setView} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
+  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView}/>} {view === "search" && <SearchView setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>} {view === "admin" && <AdminView catalog={catalog} user={user} onAuth={() => setAuthOpen(true)}/>}  {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} onAuth={() => setAuthOpen(true)}/>}</div><BottomNav view={view} setView={setView}/></div>{view === "reader" && <Reader setView={setView} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
 }
