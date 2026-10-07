@@ -1,2 +1,5 @@
 [functions.process-volume]
 verify_jwt = true
+
+[functions.semantic-search]
+verify_jwt = true
