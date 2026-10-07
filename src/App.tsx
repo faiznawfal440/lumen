@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
-import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, type CatalogBook, type UserBookmark } from "./lib/lumen";
+import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, startProcessingJob, uploadVolumePdf, type CatalogBook, type UserBookmark } from "./lib/lumen";
 import { supabase } from "./lib/supabase";
 
 type View = "home" | "search" | "reader" | "admin" | "library";
@@ -248,11 +248,58 @@ function Reader({ setView, user, onAuth, syncVolumeId, syncChapterId }: { setVie
 
 const stages = ["Validate file","Extract text & OCR","Analyze structure","Detect chapters","Extract metadata","Generate summaries","Characters & glossary","Generate embeddings","Human review","Publish"];
 
-function AdminView() {
+function AdminView({ catalog, user, onAuth }: { catalog: CatalogBook[]; user: User | null; onAuth: () => void }) {
   const [selectedStage, setSelectedStage] = useState(5);
+  const [selectedVolumeId, setSelectedVolumeId] = useState("");
+  const [uploadMessage, setUploadMessage] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const volumes = catalog.flatMap((book) => book.volumes.map((volume) => ({
+    ...volume,
+    novelTitle: book.title,
+  })));
+  useEffect(() => {
+    if (!selectedVolumeId && volumes[0]?.id) setSelectedVolumeId(volumes[0].id);
+  }, [selectedVolumeId, volumes]);
+
+  const selectedVolume = volumes.find((volume) => volume.id === selectedVolumeId);
+  const selectedNovel = catalog.find((book) => book.volumes.some((volume) => volume.id === selectedVolumeId));
+
+  async function handlePdf(file: File | undefined) {
+    if (!file) return;
+    if (!user) { setUploadMessage("Sign in first. Only editor/admin accounts can upload volumes."); onAuth(); return; }
+    if (!selectedVolumeId) { setUploadMessage("Select a volume first."); return; }
+    setUploading(true); setUploadMessage("");
+    try {
+      const jobId = await uploadVolumePdf({ user, volumeId: selectedVolumeId, file });
+      setUploadMessage("PDF uploaded. Starting AI processing…");
+      const started = await startProcessingJob(jobId);
+      if (started.error) {
+        setUploadMessage(`Job ${jobId.slice(0, 8)} created, but worker did not start: ${started.error.message}`);
+      } else {
+        setUploadMessage("Processing started. OpenAI intake will move the job into Human review when the first pass completes.");
+      }
+    } catch (error) {
+      setUploadMessage(error instanceof Error ? error.message : "PDF upload failed.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   return <main className="page admin-page">
-    <div className="admin-head"><div><span className="eyebrow">AI PROCESSING STUDIO</span><h1>Volume processing</h1><p>Review extraction quality, generated metadata, and publishing readiness.</p></div><Button icon="upload">Upload new PDF</Button></div>
-    <div className="job-summary"><img src={photos.castle} alt="Volume cover"/><div className="job-title"><span className="processing-badge"><i></i> PROCESSING</span><h2>The Saint of Hollow Skies</h2><p>Volume 4 · The Palace Above the Clouds</p></div><div className="job-stat"><span>Overall progress</span><strong>68%</strong><div className="progress"><i style={{width:"68%"}}></i></div></div><div className="job-stat"><span>Estimated remaining</span><strong>08:42</strong><small>Started 14 min ago</small></div><Button variant="secondary" icon="close">Cancel job</Button></div>
+    <div className="admin-head">
+      <div><span className="eyebrow">AI PROCESSING STUDIO</span><h1>Volume processing</h1><p>Review extraction quality, generated metadata, and publishing readiness.</p></div>
+      <div className="admin-upload-actions">
+        <select aria-label="Select volume" value={selectedVolumeId} onChange={(e)=>setSelectedVolumeId(e.target.value)}>
+          {volumes.map((volume)=><option key={volume.id} value={volume.id}>{volume.novelTitle} · Vol. {volume.volume_number}</option>)}
+        </select>
+        <input ref={fileRef} type="file" accept="application/pdf,.pdf" hidden onChange={(e)=>{ void handlePdf(e.target.files?.[0]); e.currentTarget.value=""; }} />
+        <Button icon="upload" onClick={()=>fileRef.current?.click()}>{uploading ? "Uploading…" : "Upload new PDF"}</Button>
+      </div>
+    </div>
+    {uploadMessage && <div className="upload-message">{uploadMessage}</div>}
+    <div className="job-summary"><img src={selectedNovel?.cover_path ?? photos.castle} alt="Volume cover"/><div className="job-title"><span className="processing-badge"><i></i> PROCESSING</span><h2>{selectedNovel?.title ?? "Select a volume"}</h2><p>{selectedVolume ? `Volume ${selectedVolume.volume_number} · ${selectedVolume.subtitle ?? selectedVolume.title}` : "Choose a volume above"}</p></div><div className="job-stat"><span>Overall progress</span><strong>68%</strong><div className="progress"><i style={{width:"68%"}}></i></div></div><div className="job-stat"><span>Estimated remaining</span><strong>08:42</strong><small>Started 14 min ago</small></div><Button variant="secondary" icon="close">Cancel job</Button></div>
     <div className="admin-layout">
       <section className="pipeline-card"><div className="card-head"><div><span>LIVE PIPELINE</span><h2>AI processing stages</h2></div><span className="live"><i></i> Live</span></div>
         <div className="pipeline">{stages.map((stage,i)=><button type="button" key={stage} className={`${i<5?"done":i===5?"current":""} ${selectedStage===i?"selected":""}`} onClick={()=>setSelectedStage(i)}><span className="stage-icon">{i<5?<Icon name="check" size={15}/>:i===5?<Icon name="sparkles" size={16}/>:i+1}</span><div><strong>{stage}</strong><small>{i<5?"Completed":i===5?"Generating chapter summaries…":"Waiting"}</small></div>{i<5&&<b>{["00:08","04:21","00:47","01:12","02:34"][i]}</b>}{i===5&&<em>68%</em>}</button>)}</div>
@@ -338,5 +385,5 @@ export default function App() {
 
   async function handleSignOut() { await signOut(); setUser(null); setView("home"); }
 
-  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView}/>} {view === "search" && <SearchView setView={setView}/>} {view === "admin" && <AdminView/>} {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} onAuth={() => setAuthOpen(true)}/>}</div><BottomNav view={view} setView={setView}/></div>{view === "reader" && <Reader setView={setView} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
+  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView}/>} {view === "search" && <SearchView setView={setView}/>} {view === "admin" && <AdminView catalog={catalog} user={user} onAuth={() => setAuthOpen(true)}/>}  {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} onAuth={() => setAuthOpen(true)}/>}</div><BottomNav view={view} setView={setView}/></div>{view === "reader" && <Reader setView={setView} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
 }
