@@ -330,7 +330,7 @@ function Reader({
       <Button variant="icon" icon="close" label="Close reader" onClick={() => setView("home")}/>
       <div className="reader-title">
         <strong>{volume ? `${volume.title ?? `Volume ${volume.volume_number}`} — ${volume.subtitle ?? ""}` : "Lumen Reader"}</strong>
-        <small>Chapter ${chapterNumber} · {fallbackTitle}</small>
+        <small>{`Chapter ${chapterNumber} · ${fallbackTitle}`}</small>
       </div>
       <div className="reader-tools">
         <Button variant="icon" icon="search" label="Search in book"/>
