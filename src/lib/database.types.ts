@@ -478,6 +478,7 @@ export type Database = {
           created_by: string | null
           current_stage: string | null
           error_message: string | null
+          file_size_bytes: number | null
           finished_at: string | null
           id: string
           input_path: string
@@ -492,6 +493,7 @@ export type Database = {
           created_by?: string | null
           current_stage?: string | null
           error_message?: string | null
+          file_size_bytes?: number | null
           finished_at?: string | null
           id?: string
           input_path: string
@@ -506,6 +508,7 @@ export type Database = {
           created_by?: string | null
           current_stage?: string | null
           error_message?: string | null
+          file_size_bytes?: number | null
           finished_at?: string | null
           id?: string
           input_path?: string
