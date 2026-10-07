@@ -214,6 +214,34 @@ export async function uploadVolumePdf(args:{user:User;volumeId:string;file:File}
   return job.id;
 }
 
+export async function createNovel(args:{
+  user:User;
+  title:string;
+  alternateTitle?:string;
+  author?:string;
+  description?:string;
+  genres?:string[];
+  language?:string;
+  volumeNumber?:number;
+  volumeTitle?:string;
+  volumeSubtitle?:string;
+}){
+  if (!supabase) throw new Error("Supabase belum dikonfigurasi di environment aplikasi.");
+  return supabase.functions.invoke<{novel_id:string;volume_id:string;slug:string}>("create-novel", {
+    body:{
+      title:args.title,
+      alternate_title:args.alternateTitle ?? null,
+      author:args.author ?? null,
+      description:args.description ?? null,
+      genres:args.genres ?? [],
+      language:args.language ?? "en",
+      volume_number:args.volumeNumber ?? 1,
+      volume_title:args.volumeTitle ?? "Volume " + (args.volumeNumber ?? 1),
+      volume_subtitle:args.volumeSubtitle ?? null,
+    }
+  });
+}
+
 export async function startProcessingJob(jobId:string) {
   if (!supabase) throw new Error("Supabase belum dikonfigurasi di environment aplikasi.");
   return supabase.functions.invoke("process-volume", { body: { job_id: jobId } });
