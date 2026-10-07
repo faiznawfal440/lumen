@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
-import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, semanticSearch, startProcessingJob, uploadVolumePdf, fetchLatestProcessingJob, fetchProcessingStages, fetchProcessingLogs, type CatalogBook, type UserBookmark, type SemanticSearchResult, type ProcessingJob, type ProcessingStage, type ProcessingLog } from "./lib/lumen";
+import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, semanticSearch, startProcessingJob, uploadVolumePdf, createNovel, fetchLatestProcessingJob, fetchProcessingStages, fetchProcessingLogs, type CatalogBook, type UserBookmark, type SemanticSearchResult, type ProcessingJob, type ProcessingStage, type ProcessingLog } from "./lib/lumen";
 import { supabase } from "./lib/supabase";
 
 type View = "home" | "search" | "reader" | "admin" | "library";
@@ -413,7 +413,7 @@ function Reader({
 
 const stages = ["Validate file","Extract text & OCR","Analyze structure","Detect chapters","Extract metadata","Generate summaries","Characters & glossary","Generate embeddings","Human review","Publish"];
 
-function AdminView({ catalog, user, onAuth }: { catalog: CatalogBook[]; user: User | null; onAuth: () => void }) {
+function AdminView({ catalog, user, onAuth, onCatalogChanged }: { catalog: CatalogBook[]; user: User | null; onAuth: () => void; onCatalogChanged: () => Promise<void> }) {
   const [selectedStage, setSelectedStage] = useState(5);
   const [selectedVolumeId, setSelectedVolumeId] = useState("");
   const [uploadMessage, setUploadMessage] = useState("");
@@ -421,6 +421,18 @@ function AdminView({ catalog, user, onAuth }: { catalog: CatalogBook[]; user: Us
   const [job, setJob] = useState<ProcessingJob | null>(null);
   const [jobStages, setJobStages] = useState<ProcessingStage[]>([]);
   const [jobLogs, setJobLogs] = useState<ProcessingLog[]>([]);
+  const [novelOpen, setNovelOpen] = useState(false);
+  const [novelMessage, setNovelMessage] = useState("");
+  const [novelSaving, setNovelSaving] = useState(false);
+  const [novelTitle, setNovelTitle] = useState("");
+  const [novelAlternateTitle, setNovelAlternateTitle] = useState("");
+  const [novelAuthor, setNovelAuthor] = useState("");
+  const [novelDescription, setNovelDescription] = useState("");
+  const [novelGenres, setNovelGenres] = useState("");
+  const [novelLanguage, setNovelLanguage] = useState("en");
+  const [novelVolumeNumber, setNovelVolumeNumber] = useState("1");
+  const [novelVolumeTitle, setNovelVolumeTitle] = useState("Volume 1");
+  const [novelVolumeSubtitle, setNovelVolumeSubtitle] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const volumes = catalog.flatMap((book) => book.volumes.map((volume) => ({
@@ -484,6 +496,37 @@ function AdminView({ catalog, user, onAuth }: { catalog: CatalogBook[]; user: Us
     }
   }
 
+  async function handleCreateNovel() {
+    if (!user) { setNovelMessage("Sign in first. Only editor/admin accounts can add titles."); onAuth(); return; }
+    if (!novelTitle.trim()) { setNovelMessage("Novel title is required."); return; }
+    const volumeNumber = Number.parseInt(novelVolumeNumber, 10);
+    if (!Number.isInteger(volumeNumber) || volumeNumber < 1) { setNovelMessage("Volume number must be 1 or higher."); return; }
+    setNovelSaving(true); setNovelMessage("");
+    try {
+      const response = await createNovel({
+        user,
+        title: novelTitle.trim(),
+        alternateTitle: novelAlternateTitle.trim() || undefined,
+        author: novelAuthor.trim() || undefined,
+        description: novelDescription.trim() || undefined,
+        genres: novelGenres.split(",").map((item)=>item.trim()).filter(Boolean),
+        language: novelLanguage.trim() || "en",
+        volumeNumber,
+        volumeTitle: novelVolumeTitle.trim() || "Volume " + volumeNumber,
+        volumeSubtitle: novelVolumeSubtitle.trim() || undefined,
+      });
+      if (response.error) throw response.error;
+      await onCatalogChanged();
+      setNovelMessage("Novel created as Draft. You can now select its volume and upload the PDF.");
+      setNovelTitle(""); setNovelAlternateTitle(""); setNovelAuthor(""); setNovelDescription(""); setNovelGenres(""); setNovelLanguage("en"); setNovelVolumeNumber("1"); setNovelVolumeTitle("Volume 1"); setNovelVolumeSubtitle("");
+      setNovelOpen(false);
+    } catch (error) {
+      setNovelMessage(error instanceof Error ? error.message : "Novel creation failed.");
+    } finally {
+      setNovelSaving(false);
+    }
+  }
+
   return <main className="page admin-page">
     <div className="admin-head">
       <div><span className="eyebrow">AI PROCESSING STUDIO</span><h1>Volume processing</h1><p>Review extraction quality, generated metadata, and publishing readiness.</p></div>
@@ -492,10 +535,30 @@ function AdminView({ catalog, user, onAuth }: { catalog: CatalogBook[]; user: Us
           {volumes.map((volume)=><option key={volume.id} value={volume.id}>{volume.novelTitle} · Vol. {volume.volume_number}</option>)}
         </select>
         <input ref={fileRef} type="file" accept="application/pdf,.pdf" hidden onChange={(e)=>{ void handlePdf(e.target.files?.[0]); e.currentTarget.value=""; }} />
+        <Button variant="secondary" icon="book" onClick={()=>{setNovelOpen(true);setNovelMessage("");}} >Add novel title</Button>
         <Button icon="upload" onClick={()=>fileRef.current?.click()}>{uploading ? "Uploading…" : "Upload new PDF"}</Button>
       </div>
     </div>
     {uploadMessage && <div className="upload-message">{uploadMessage}</div>}
+    {novelMessage && !novelOpen && <div className="upload-message">{novelMessage}</div>}
+    {novelOpen && <div className="modal-backdrop" role="presentation" onMouseDown={()=>!novelSaving && setNovelOpen(false)}><section className="auth-modal novel-modal" role="dialog" aria-modal="true" onMouseDown={(e)=>e.stopPropagation()}>
+      <button type="button" className="modal-close" onClick={()=>!novelSaving && setNovelOpen(false)} aria-label="Close">×</button>
+      <div className="auth-brand"><span className="logo-mark">L</span><div><strong>Add novel title</strong><small>Create a new series and its first volume.</small></div></div>
+      <div className="novel-form-grid">
+        <label>Title<input value={novelTitle} onChange={(e)=>setNovelTitle(e.target.value)} placeholder="The Name of the Novel" autoFocus/></label>
+        <label>Alternate title<input value={novelAlternateTitle} onChange={(e)=>setNovelAlternateTitle(e.target.value)} placeholder="Japanese / original title"/></label>
+        <label>Author<input value={novelAuthor} onChange={(e)=>setNovelAuthor(e.target.value)} placeholder="Author name"/></label>
+        <label>Language<input value={novelLanguage} onChange={(e)=>setNovelLanguage(e.target.value)} placeholder="en"/></label>
+        <label>Genres<input value={novelGenres} onChange={(e)=>setNovelGenres(e.target.value)} placeholder="Fantasy, Adventure, Romance"/></label>
+        <label>First volume number<input type="number" min="1" value={novelVolumeNumber} onChange={(e)=>{setNovelVolumeNumber(e.target.value); if(!novelVolumeTitle || /^Volume \d+$/.test(novelVolumeTitle)) setNovelVolumeTitle("Volume " + e.target.value)}}/></label>
+        <label>Volume title<input value={novelVolumeTitle} onChange={(e)=>setNovelVolumeTitle(e.target.value)} placeholder="Volume 1"/></label>
+        <label>Volume subtitle<input value={novelVolumeSubtitle} onChange={(e)=>setNovelVolumeSubtitle(e.target.value)} placeholder="Optional subtitle"/></label>
+      </div>
+      <label>Description<textarea value={novelDescription} onChange={(e)=>setNovelDescription(e.target.value)} placeholder="Short spoiler-safe description..." rows={4}/></label>
+      {novelMessage && <div className="auth-message">{novelMessage}</div>}
+      <button type="button" className="btn btn-primary auth-submit" onClick={()=>void handleCreateNovel()} disabled={novelSaving}>{novelSaving ? "Creating…" : "Create draft novel"}</button>
+      <small className="auth-note">The title starts as Draft. Upload and process a PDF from AI Studio before publishing it.</small>
+    </section></div>}
     <div className="job-summary"><img src={selectedNovel?.cover_path ?? photos.castle} alt="Volume cover"/><div className="job-title"><span className="processing-badge"><i></i> {(job?.status ?? "idle").toUpperCase()}</span><h2>{selectedNovel?.title ?? "Select a volume"}</h2><p>{selectedVolume ? "Volume " + selectedVolume.volume_number + " · " + (selectedVolume.subtitle ?? selectedVolume.title) : "Choose a volume above"}</p></div><div className="job-stat"><span>Overall progress</span><strong>{Math.round(Number(job?.progress_percent ?? 0))}%</strong><div className="progress"><i style={{width:(Math.round(Number(job?.progress_percent ?? 0)) + "%")}}></i></div><small>{job?.current_stage ?? "No processing job yet"}</small></div><div className="job-stat"><span>Job</span><strong>{job ? job.id.slice(0,8) : "—"}</strong><small>{job?.started_at ? "Started " + new Date(job.started_at).toLocaleTimeString() : "Upload a PDF to create one"}</small></div><Button variant="secondary" onClick={()=>void refreshJob()}>{job ? "Refresh" : "Check status"}</Button></div>
     {job?.error_message && <div className="upload-message">{job.error_message}</div>}
     <div className="admin-layout">
@@ -557,13 +620,23 @@ export default function App() {
   );
   const [, forceCatalogRefresh] = useState(0);
 
+  async function refreshCatalog() {
+    const items = await fetchCatalog();
+    setCatalog(items);
+    if (items.length) {
+      books = catalogToDisplayBooks(items);
+      forceCatalogRefresh((v) => v + 1);
+    } else {
+      books = [];
+      forceCatalogRefresh((v) => v + 1);
+    }
+  }
+
   useEffect(() => {
     let active = true;
-    fetchCatalog().then((items) => {
-      if (!active) return;
-      setCatalog(items);
-      if (items.length) { books = catalogToDisplayBooks(items); forceCatalogRefresh((v) => v + 1); }
-    }).catch(() => undefined);
+    refreshCatalog().catch(() => undefined);
+    if (!active) return () => { active = false; };
+    
     if (!supabase) return () => { active = false; };
     supabase.auth.getSession().then(({ data }) => { if (active) setUser(data.session?.user ?? null); });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
@@ -614,5 +687,5 @@ export default function App() {
 
   async function handleSignOut() { await signOut(); setUser(null); setReaderTarget({volumeId:"",chapterId:null}); setView("home"); if (typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname + window.location.search); }
 
-  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView} catalog={catalog} progress={progress} onRead={(book)=>openReader({book})}/>} {view === "search" && <SearchView setView={setView} user={user} onAuth={() => setAuthOpen(true)} onRead={(target)=>openReader(target)}/>} {view === "admin" && <AdminView catalog={catalog} user={user} onAuth={() => setAuthOpen(true)}/>} {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} catalog={catalog} onAuth={() => setAuthOpen(true)} onRead={openReader}/>}</div><BottomNav view={view} setView={(next)=> next === "reader" ? openReader() : setView(next)}/></div>{view === "reader" && <Reader setView={(next)=>{if(next !== "reader") { setView(next); if (typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname + window.location.search); }}} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null} volume={targetVolume} chapter={targetChapter} onSelectChapter={selectReaderChapter}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
+  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView} catalog={catalog} progress={progress} onRead={(book)=>openReader({book})}/>} {view === "search" && <SearchView setView={setView} user={user} onAuth={() => setAuthOpen(true)} onRead={(target)=>openReader(target)}/>} {view === "admin" && <AdminView catalog={catalog} user={user} onAuth={() => setAuthOpen(true)} onCatalogChanged={refreshCatalog}/>} {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} catalog={catalog} onAuth={() => setAuthOpen(true)} onRead={openReader}/>}</div><BottomNav view={view} setView={(next)=> next === "reader" ? openReader() : setView(next)}/></div>{view === "reader" && <Reader setView={(next)=>{if(next !== "reader") { setView(next); if (typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname + window.location.search); }}} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null} volume={targetVolume} chapter={targetChapter} onSelectChapter={selectReaderChapter}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
 }
