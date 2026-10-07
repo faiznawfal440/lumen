@@ -37,7 +37,9 @@ Deno.serve(
     try {
       const body = await req.json();
       const query = typeof body?.query === "string" ? body.query.trim() : "";
-      const requestedCount = Number.isFinite(body?.match_count) ? Number(body.match_count) : 8;
+      const requestedCount = Number.isFinite(body?.match_count)
+        ? Number(body.match_count)
+        : 8;
 
       if (query.length < 2) {
         return Response.json(
@@ -54,22 +56,27 @@ Deno.serve(
         );
       }
 
-      const embeddingResponse = await fetch("https://api.openai.com/v1/embeddings", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
+      const embeddingResponse = await fetch(
+        "https://api.openai.com/v1/embeddings",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "text-embedding-3-small",
+            input: query.slice(0, 8000),
+            encoding_format: "float",
+          }),
         },
-        body: JSON.stringify({
-          model: "text-embedding-3-small",
-          input: query.slice(0, 8000),
-          encoding_format: "float",
-        }),
-      });
+      );
 
       const embeddingPayload = await embeddingResponse.json();
       if (!embeddingResponse.ok) {
-        throw new Error(embeddingPayload?.error?.message || "Embedding request failed.");
+        throw new Error(
+          embeddingPayload?.error?.message || "Embedding request failed.",
+        );
       }
 
       const vector = embeddingPayload?.data?.[0]?.embedding;
@@ -82,35 +89,44 @@ Deno.serve(
         ? Math.max(0, Math.min(0.95, body.match_threshold))
         : 0.55;
 
-      const { data, error } = await ctx.supabaseAdmin.rpc("match_lumen_chunks", {
-        query_embedding: `[${vector.join(",")}]`,
-        match_threshold: matchThreshold,
-        match_count: matchCount,
-      });
+      const { data, error } = await ctx.supabaseAdmin.rpc(
+        "match_lumen_chunks",
+        {
+          query_embedding: `[${vector.join(",")}]`,
+          match_threshold: matchThreshold,
+          match_count: matchCount,
+        },
+      );
 
       if (error) throw error;
 
       const results = (data ?? []) as SearchRow[];
 
-      return Response.json({
-        query,
-        count: results.length,
-        results: results.map((row) => ({
-          score: Math.round(row.similarity * 100),
-          similarity: row.similarity,
-          title: row.chapter_title,
-          chapter: `Chapter ${row.chapter_number}`,
-          book: `${row.novel_title} · Volume ${row.volume_number}`,
-          novel_slug: row.novel_slug,
-          chapter_id: row.chapter_id,
-          volume_id: row.volume_id,
-          excerpt: row.content.slice(0, 700),
-          why: "Semantic match based on the meaning of the indexed scene.",
-        })),
-      }, { headers: corsHeaders });
+      return Response.json(
+        {
+          query,
+          count: results.length,
+          results: results.map((row) => ({
+            score: Math.round(row.similarity * 100),
+            similarity: row.similarity,
+            title: row.chapter_title,
+            chapter: `Chapter ${row.chapter_number}`,
+            book: `${row.novel_title} · Volume ${row.volume_number}`,
+            novel_slug: row.novel_slug,
+            chapter_id: row.chapter_id,
+            volume_id: row.volume_id,
+            excerpt: row.content.slice(0, 700),
+            why: "Semantic match based on the meaning of the indexed scene.",
+          })),
+        },
+        { headers: corsHeaders },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Semantic search failed.";
-      return Response.json({ error: message }, { status: 500, headers: corsHeaders });
+      return Response.json(
+        { error: message },
+        { status: 500, headers: corsHeaders },
+      );
     }
   }),
 );
