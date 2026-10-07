@@ -1,0 +1,2 @@
+[functions.process-volume]
+verify_jwt = true
