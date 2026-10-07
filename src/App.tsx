@@ -78,8 +78,8 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   return <svg aria-hidden="true" viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
 
-function Button({ children, variant = "primary", icon, onClick, className = "", label }: { children?: ReactNode; variant?: "primary" | "secondary" | "ghost" | "icon"; icon?: IconName; onClick?: () => void; className?: string; label?: string }) {
-  return <button type="button" aria-label={label} className={`btn btn-${variant} ${className}`} onClick={onClick}>{icon && <Icon name={icon} />}{children}</button>;
+function Button({ children, variant = "primary", icon, onClick, className = "", label, disabled }: { children?: ReactNode; variant?: "primary" | "secondary" | "ghost" | "icon"; icon?: IconName; onClick?: () => void; className?: string; label?: string; disabled?: boolean }) {
+  return <button type="button" aria-label={label} className={`btn btn-${variant} ${className}`} onClick={onClick} disabled={disabled}>{icon && <Icon name={icon} />}{children}</button>;
 }
 
 function Logo({ compact = false }: { compact?: boolean }) {
