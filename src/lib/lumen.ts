@@ -110,3 +110,27 @@ export async function startProcessingJob(jobId:string) {
   if (!supabase) throw new Error("Supabase belum dikonfigurasi di environment aplikasi.");
   return supabase.functions.invoke("process-volume", { body: { job_id: jobId } });
 }
+
+export type SemanticSearchResult = {
+  score:number;
+  similarity:number;
+  title:string;
+  chapter:string;
+  book:string;
+  novel_slug:string;
+  chapter_id:string;
+  volume_id:string;
+  excerpt:string;
+  why:string;
+};
+
+export async function semanticSearch(args:{query:string;matchCount?:number;matchThreshold?:number}) {
+  if (!supabase) throw new Error("Supabase belum dikonfigurasi di environment aplikasi.");
+  return supabase.functions.invoke<{query:string;count:number;results:SemanticSearchResult[]}>("semantic-search", {
+    body: {
+      query: args.query,
+      match_count: args.matchCount ?? 8,
+      match_threshold: args.matchThreshold ?? 0.55,
+    },
+  });
+}
