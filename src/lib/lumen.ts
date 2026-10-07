@@ -214,6 +214,18 @@ export async function uploadVolumePdf(args:{user:User;volumeId:string;file:File}
   return job.id;
 }
 
+export async function fetchCurrentUserRole():Promise<"reader"|"editor"|"admin"> {
+  if (!supabase) return "reader";
+  const response = await supabase.functions.invoke<{role:"reader"|"editor"|"admin"}>("get-my-role", { body: {} });
+  if (response.error) throw response.error;
+  return response.data?.role ?? "reader";
+}
+
+function edgeFunctionErrorMessage(error: unknown, fallback: string) {
+  const candidate = error as { message?: string; context?: Response };
+  return candidate?.message || fallback;
+}
+
 export async function createNovel(args:{
   user:User;
   title:string;
@@ -227,7 +239,7 @@ export async function createNovel(args:{
   volumeSubtitle?:string;
 }){
   if (!supabase) throw new Error("Supabase belum dikonfigurasi di environment aplikasi.");
-  return supabase.functions.invoke<{novel_id:string;volume_id:string;slug:string}>("create-novel", {
+  const response = await supabase.functions.invoke<{novel_id:string;volume_id:string;slug:string}>("create-novel", {
     body:{
       title:args.title,
       alternate_title:args.alternateTitle ?? null,
@@ -240,6 +252,20 @@ export async function createNovel(args:{
       volume_subtitle:args.volumeSubtitle ?? null,
     }
   });
+  if (response.error) {
+    const context = (response.error as { context?: Response }).context;
+    let message = edgeFunctionErrorMessage(response.error, "Novel creation failed.");
+    if (context) {
+      try {
+        const payload = await context.clone().json();
+        if (typeof payload?.error === "string") message = payload.error;
+      } catch {
+        /* Keep the SDK error when the response body is not JSON. */
+      }
+    }
+    return { data: response.data, error: new Error(message) };
+  }
+  return response;
 }
 
 export async function startProcessingJob(jobId:string) {

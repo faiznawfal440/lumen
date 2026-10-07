@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
-import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, semanticSearch, startProcessingJob, uploadVolumePdf, createNovel, fetchLatestProcessingJob, fetchProcessingStages, fetchProcessingLogs, type CatalogBook, type UserBookmark, type SemanticSearchResult, type ProcessingJob, type ProcessingStage, type ProcessingLog } from "./lib/lumen";
+import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, saveReadingProgress, signIn, signUp, signOut, toggleBookmark, semanticSearch, startProcessingJob, uploadVolumePdf, createNovel, fetchCurrentUserRole, fetchLatestProcessingJob, fetchProcessingStages, fetchProcessingLogs, type CatalogBook, type UserBookmark, type SemanticSearchResult, type ProcessingJob, type ProcessingStage, type ProcessingLog } from "./lib/lumen";
 import { supabase } from "./lib/supabase";
 
 type View = "home" | "search" | "reader" | "admin" | "library";
@@ -78,8 +78,8 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   return <svg aria-hidden="true" viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
 
-function Button({ children, variant = "primary", icon, onClick, className = "", label }: { children?: ReactNode; variant?: "primary" | "secondary" | "ghost" | "icon"; icon?: IconName; onClick?: () => void; className?: string; label?: string }) {
-  return <button type="button" aria-label={label} className={`btn btn-${variant} ${className}`} onClick={onClick}>{icon && <Icon name={icon} />}{children}</button>;
+function Button({ children, variant = "primary", icon, onClick, className = "", label, disabled }: { children?: ReactNode; variant?: "primary" | "secondary" | "ghost" | "icon"; icon?: IconName; onClick?: () => void; className?: string; label?: string; disabled?: boolean }) {
+  return <button type="button" aria-label={label} className={`btn btn-${variant} ${className}`} onClick={onClick} disabled={disabled}>{icon && <Icon name={icon} />}{children}</button>;
 }
 
 function Logo({ compact = false }: { compact?: boolean }) {
@@ -433,6 +433,7 @@ function AdminView({ catalog, user, onAuth, onCatalogChanged }: { catalog: Catal
   const [novelVolumeNumber, setNovelVolumeNumber] = useState("1");
   const [novelVolumeTitle, setNovelVolumeTitle] = useState("Volume 1");
   const [novelVolumeSubtitle, setNovelVolumeSubtitle] = useState("");
+  const [role, setRole] = useState<"reader"|"editor"|"admin">("reader");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const volumes = catalog.flatMap((book) => book.volumes.map((volume) => ({
@@ -442,6 +443,11 @@ function AdminView({ catalog, user, onAuth, onCatalogChanged }: { catalog: Catal
   useEffect(() => {
     if (!selectedVolumeId && volumes[0]?.id) setSelectedVolumeId(volumes[0].id);
   }, [selectedVolumeId, catalog]);
+
+  useEffect(() => {
+    if (!user) { setRole("reader"); return; }
+    fetchCurrentUserRole().then(setRole).catch(() => setRole("reader"));
+  }, [user?.id]);
 
   async function refreshJob(volumeId = selectedVolumeId) {
     if (!volumeId || !user) {
@@ -535,11 +541,12 @@ function AdminView({ catalog, user, onAuth, onCatalogChanged }: { catalog: Catal
           {volumes.map((volume)=><option key={volume.id} value={volume.id}>{volume.novelTitle} · Vol. {volume.volume_number}</option>)}
         </select>
         <input ref={fileRef} type="file" accept="application/pdf,.pdf" hidden onChange={(e)=>{ void handlePdf(e.target.files?.[0]); e.currentTarget.value=""; }} />
-        <Button variant="secondary" icon="book" onClick={()=>{setNovelOpen(true);setNovelMessage("");}} >Add novel title</Button>
-        <Button icon="upload" onClick={()=>fileRef.current?.click()}>{uploading ? "Uploading…" : "Upload new PDF"}</Button>
+        <Button variant="secondary" icon="book" onClick={()=>{setNovelOpen(true);setNovelMessage("");}} disabled={role==="reader"}>Add novel title</Button>
+        <Button icon="upload" onClick={()=>fileRef.current?.click()} disabled={role==="reader"}>{uploading ? "Uploading…" : "Upload new PDF"}</Button>
       </div>
     </div>
     {uploadMessage && <div className="upload-message">{uploadMessage}</div>}
+    {role==="reader" && <div className="upload-message permission-message"><strong>Reader access only.</strong> Your current account is a Reader. Content management requires the Editor or Admin role.</div>}
     {novelMessage && !novelOpen && <div className="upload-message">{novelMessage}</div>}
     {novelOpen && <div className="modal-backdrop" role="presentation" onMouseDown={()=>!novelSaving && setNovelOpen(false)}><section className="auth-modal novel-modal" role="dialog" aria-modal="true" onMouseDown={(e)=>e.stopPropagation()}>
       <button type="button" className="modal-close" onClick={()=>!novelSaving && setNovelOpen(false)} aria-label="Close">×</button>
@@ -556,7 +563,7 @@ function AdminView({ catalog, user, onAuth, onCatalogChanged }: { catalog: Catal
       </div>
       <label>Description<textarea value={novelDescription} onChange={(e)=>setNovelDescription(e.target.value)} placeholder="Short spoiler-safe description..." rows={4}/></label>
       {novelMessage && <div className="auth-message">{novelMessage}</div>}
-      <button type="button" className="btn btn-primary auth-submit" onClick={()=>void handleCreateNovel()} disabled={novelSaving}>{novelSaving ? "Creating…" : "Create draft novel"}</button>
+      <button type="button" className="btn btn-primary auth-submit" onClick={()=>void handleCreateNovel()} disabled={novelSaving || role==="reader"}>{novelSaving ? "Creating…" : "Create draft novel"}</button>
       <small className="auth-note">The title starts as Draft. Upload and process a PDF from AI Studio before publishing it.</small>
     </section></div>}
     <div className="job-summary"><img src={selectedNovel?.cover_path ?? photos.castle} alt="Volume cover"/><div className="job-title"><span className="processing-badge"><i></i> {(job?.status ?? "idle").toUpperCase()}</span><h2>{selectedNovel?.title ?? "Select a volume"}</h2><p>{selectedVolume ? "Volume " + selectedVolume.volume_number + " · " + (selectedVolume.subtitle ?? selectedVolume.title) : "Choose a volume above"}</p></div><div className="job-stat"><span>Overall progress</span><strong>{Math.round(Number(job?.progress_percent ?? 0))}%</strong><div className="progress"><i style={{width:(Math.round(Number(job?.progress_percent ?? 0)) + "%")}}></i></div><small>{job?.current_stage ?? "No processing job yet"}</small></div><div className="job-stat"><span>Job</span><strong>{job ? job.id.slice(0,8) : "—"}</strong><small>{job?.started_at ? "Started " + new Date(job.started_at).toLocaleTimeString() : "Upload a PDF to create one"}</small></div><Button variant="secondary" onClick={()=>void refreshJob()}>{job ? "Refresh" : "Check status"}</Button></div>
