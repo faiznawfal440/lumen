@@ -208,63 +208,195 @@ function SearchView({ setView, user, onAuth }: { setView: (view: View) => void; 
     </div>
   </main>;
 }
-function Reader({ setView, user, onAuth, syncVolumeId, syncChapterId }: { setView: (view: View) => void; user: User | null; onAuth: () => void; syncVolumeId: string | null; syncChapterId: string | null }) {
+function Reader({
+  setView,
+  user,
+  onAuth,
+  syncVolumeId,
+  syncChapterId,
+  volume,
+  chapter,
+}: {
+  setView: (view: View) => void;
+  user: User | null;
+  onAuth: () => void;
+  syncVolumeId: string | null;
+  syncChapterId: string | null;
+  volume: CatalogBook["volumes"][number] | undefined;
+  chapter: CatalogBook["volumes"][number]["chapters"][number] | undefined;
+}) {
   const [theme, setTheme] = useState<"light"|"sepia"|"dark"|"amoled">("sepia");
   const [panel, setPanel] = useState<"toc"|"info"|null>("info");
   const [saved, setSaved] = useState(false);
-  const [pageNumber, setPageNumber] = useState(142);
+  const [pageNumber, setPageNumber] = useState(chapter?.start_page ?? 1);
+  const [pages, setPages] = useState<import("./lib/lumen").ChapterPage[]>([]);
+  const [pageLoading, setPageLoading] = useState(false);
+
+  const pageCount = Math.max(
+    volume?.page_count ?? 0,
+    chapter?.end_page ?? 0,
+    pages.at(-1)?.page_number ?? 0,
+    1
+  );
+  const currentPage = pages.find((page) => page.page_number === pageNumber);
+  const fallbackTitle = chapter?.title ?? "Chapter";
+  const chapterNumber = chapter?.chapter_number ?? 1;
+
+  useEffect(() => {
+    let active = true;
+    if (!syncChapterId) {
+      setPages([]);
+      return () => { active = false; };
+    }
+    setPageLoading(true);
+    import("./lib/lumen").then(({ fetchChapterPages }) =>
+      fetchChapterPages(syncChapterId)
+        .then((items) => {
+          if (active) {
+            setPages(items);
+            const firstAvailable = items[0]?.page_number;
+            if (firstAvailable && pageNumber < firstAvailable) setPageNumber(firstAvailable);
+          }
+        })
+        .catch(() => {
+          if (active) setPages([]);
+        })
+        .finally(() => {
+          if (active) setPageLoading(false);
+        })
+    );
+    return () => { active = false; };
+  }, [syncChapterId]);
+
   useEffect(() => {
     if (!user || !syncVolumeId) return;
-    fetchUserBookmarks(user.id).then((items) => setSaved(items.some((item) => item.volume_id === syncVolumeId && item.page_number === pageNumber))).catch(() => undefined);
-  }, [user, syncVolumeId, pageNumber]);
+    import("./lib/lumen").then(({ fetchUserBookmarks, fetchUserProgress }) => {
+      fetchUserBookmarks(user.id)
+        .then((items) => setSaved(items.some((item) => item.volume_id === syncVolumeId && item.page_number === pageNumber)))
+        .catch(() => undefined);
+      fetchUserProgress(user.id)
+        .then((items) => {
+          const savedProgress = items.find((item) => item.volume_id === syncVolumeId);
+          if (savedProgress?.page_number) setPageNumber(savedProgress.page_number);
+        })
+        .catch(() => undefined);
+    });
+  }, [user, syncVolumeId]);
+
   async function persistProgress(nextPage: number) {
     if (!user || !syncVolumeId) return;
-    const pct = Math.max(0, Math.min(100, (nextPage / 228) * 100));
-    try { await saveReadingProgress({ user, volumeId: syncVolumeId, chapterId: syncChapterId, pageNumber: nextPage, progressPercent: pct }); } catch (error) { console.debug(error); }
+    const pct = Math.max(0, Math.min(100, (nextPage / pageCount) * 100));
+    const { saveReadingProgress } = await import("./lib/lumen");
+    try {
+      await saveReadingProgress({
+        user,
+        volumeId: syncVolumeId,
+        chapterId: syncChapterId,
+        pageNumber: nextPage,
+        progressPercent: pct
+      });
+    } catch (error) {
+      console.debug(error);
+    }
   }
+
+  async function goToPage(nextPage: number) {
+    const next = Math.max(1, Math.min(pageCount, nextPage));
+    setPageNumber(next);
+    void persistProgress(next);
+  }
+
   async function handleBookmark() {
     if (!user) { onAuth(); return; }
     if (!syncVolumeId) return;
-    try { const next = await toggleBookmark({ user, volumeId: syncVolumeId, chapterId: syncChapterId, pageNumber }); setSaved(next); } catch { /* keep reader responsive */ }
+    const { toggleBookmark } = await import("./lib/lumen");
+    try {
+      const next = await toggleBookmark({
+        user,
+        volumeId: syncVolumeId,
+        chapterId: syncChapterId,
+        pageNumber
+      });
+      setSaved(next);
+    } catch {
+      /* keep reader responsive */
+    }
   }
+
+  const paragraphs = (currentPage?.content ?? "").split(/\\n\\s*\\n|\\n/).map((text) => text.trim()).filter(Boolean);
+
   return <div className={`reader theme-${theme}`}>
     <header className="reader-top">
       <Button variant="icon" icon="close" label="Close reader" onClick={() => setView("home")}/>
-      <div className="reader-title"><strong>Asteria Academy — Volume 3</strong><small>Chapter 7 · The Duel Beneath Violet Rain</small></div>
-      <div className="reader-tools"><Button variant="icon" icon="search" label="Search in book"/><Button variant="icon" icon="type" label="Typography settings"/><Button variant="icon" icon="list" label="Table of contents" onClick={()=>setPanel(panel==="toc"?null:"toc")}/><Button variant="icon" icon="panel" label="Knowledge panel" onClick={()=>setPanel(panel==="info"?null:"info")}/><Button variant="icon" icon={saved?"check":"bookmark"} label="Bookmark" onClick={handleBookmark}/></div>
+      <div className="reader-title">
+        <strong>{volume ? `${volume.title ?? `Volume ${volume.volume_number}`} — ${volume.subtitle ?? ""}` : "Lumen Reader"}</strong>
+        <small>{`Chapter ${chapterNumber} · ${fallbackTitle}`}</small>
+      </div>
+      <div className="reader-tools">
+        <Button variant="icon" icon="search" label="Search in book"/>
+        <Button variant="icon" icon="type" label="Typography settings"/>
+        <Button variant="icon" icon="list" label="Table of contents" onClick={()=>setPanel(panel==="toc"?null:"toc")}/>
+        <Button variant="icon" icon="panel" label="Knowledge panel" onClick={()=>setPanel(panel==="info"?null:"info")}/>
+        <Button variant="icon" icon={saved?"check":"bookmark"} label="Bookmark" onClick={handleBookmark}/>
+      </div>
     </header>
-    <div className="reader-progress"><i style={{width:"62%"}}></i></div>
+    <div className="reader-progress"><i style={{width:`${Math.round((pageNumber / pageCount) * 100)}%`}}></i></div>
     <div className="reader-shell">
-      <aside className="reader-rail"><Button variant="icon" icon="chevron" label="Previous page" onClick={() => { const n = Math.max(1, pageNumber - 1); setPageNumber(n); void persistProgress(n); }}/><span>{pageNumber}</span><div className="vertical-track"><i style={{height:`${Math.min(100, (pageNumber / 228) * 100)}%`}}></i></div><span>228</span><Button variant="icon" icon="chevron" label="Next page" onClick={() => { const n = Math.min(228, pageNumber + 1); setPageNumber(n); void persistProgress(n); }}/></aside>
+      <aside className="reader-rail">
+        <Button variant="icon" icon="chevron" label="Previous page" onClick={() => void goToPage(pageNumber - 1)}/>
+        <span>{pageNumber}</span>
+        <div className="vertical-track"><i style={{height:`${Math.min(100, (pageNumber / pageCount) * 100)}%`}}></i></div>
+        <span>{pageCount}</span>
+        <Button variant="icon" icon="chevron" label="Next page" onClick={() => void goToPage(pageNumber + 1)}/>
+      </aside>
       <article className="reading-page">
-        <div className="chapter-mark"><span>CHAPTER SEVEN</span><i></i></div>
-        <h1>The Duel Beneath<br/>Violet Rain</h1>
-        <p className="dropcap">The first bell rang at noon, though no one in the eastern courtyard heard it over the roar of the crowd. Three thousand students stood beneath banners of silver and indigo, their faces turned toward the circle of white stone at the academy’s heart.</p>
-        <p>Kael waited inside it alone.</p>
-        <p>His wand was broken. Not cracked, not chipped—broken cleanly through the middle, with a pale thread of light still trembling between the two halves.</p>
-        <p>Across the arena, Lady Seraphine removed one white glove finger by finger. The gesture was so calm that the crowd fell silent.</p>
-        <blockquote>“You may yield,” she said. “There is no shame in choosing tomorrow.”</blockquote>
-        <p>Kael looked past her, toward the high balcony where the Council sat behind their mirrored masks. Somewhere among them was the person who had erased his sister’s name from the academy records.</p>
-        <p>He closed his hand around the broken wand.</p>
-        <p>“Tomorrow,” he said, “is precisely what I’m fighting for.”</p>
+        <div className="chapter-mark"><span>CHAPTER {String(chapterNumber).padStart(2, "0")}</span><i></i></div>
+        <h1>{fallbackTitle}</h1>
+        {pageLoading && <div className="reader-inline-status">Loading extracted page…</div>}
+        {!pageLoading && paragraphs.length === 0 && (
+          <div className="reader-inline-status">
+            <strong>Page {pageNumber} has not been extracted yet.</strong>
+            <span>The PDF processing pipeline needs to finish this page before Lumen can display its text.</span>
+          </div>
+        )}
+        {paragraphs.map((paragraph, index) =>
+          <p className={index === 0 ? "dropcap" : ""} key={`${pageNumber}-${index}`}>{paragraph}</p>
+        )}
         <div className="scene-break">✦</div>
-        <p>The rain began upward. Violet droplets lifted from the stone and drifted into the open sky, each one holding the reflection of a different memory.</p>
-        <footer><span>ASTERIA ACADEMY</span><b>— 142 —</b><span>VOLUME THREE</span></footer>
+        <footer><span>{volume?.title ?? "LUMEN"}</span><b>— {pageNumber} —</b><span>VOLUME {volume?.volume_number ?? ""}</span></footer>
       </article>
       {panel && <aside className="knowledge-panel">
-        <div className="panel-tabs"><button type="button" className={panel==="info"?"active":""} onClick={()=>setPanel("info")}>Knowledge</button><button type="button" className={panel==="toc"?"active":""} onClick={()=>setPanel("toc")}>Contents</button></div>
-        {panel === "info" ? <><div className="safe-badge"><Icon name="eye" size={15}/> Safe for Volume 3</div><h2>In this scene</h2><div className="character"><span className="avatar lavender">K</span><div><strong>Kael Avenhart</strong><small>Disgraced heir · 34 appearances</small></div><Icon name="chevron" size={16}/></div><div className="character"><span className="avatar rose">S</span><div><strong>Lady Seraphine</strong><small>Student council · 21 appearances</small></div><Icon name="chevron" size={16}/></div><h3>Glossary</h3><div className="glossary"><strong>Violet Rain</strong><p>An advanced mnemonic spell that manifests fragments of nearby memories.</p><span>First appeared · Chapter 4</span></div><div className="glossary"><strong>Mirrored Council</strong><p>The academy’s anonymous governing body.</p><span>First appeared · Volume 1</span></div></> :
-        <><h2>Table of contents</h2>{["A Crown of Ash","The Seventh Bell","Letters Unsent","Founding Festival","The Duel Beneath Violet Rain","What the Rain Remembered"].map((x,i)=><button type="button" className={`chapter-link ${i===4?"active":""}`} key={x}><span>{String(i+3).padStart(2,"0")}</span>{x}{i<4&&<Icon name="check" size={15}/>}</button>)}</>}
+        <div className="panel-tabs">
+          <button type="button" className={panel==="info"?"active":""} onClick={()=>setPanel("info")}>Knowledge</button>
+          <button type="button" className={panel==="toc"?"active":""} onClick={()=>setPanel("toc")}>Contents</button>
+        </div>
+        {panel === "info" ? <div className="reader-context-empty">
+          <div className="safe-badge"><Icon name="eye" size={15}/> Safe for current volume</div>
+          <h2>In this scene</h2>
+          <p>Character and glossary extraction will appear here as the AI processing pipeline completes the volume.</p>
+          <div className="glossary"><strong>Chapter summary</strong><p>{chapter?.spoiler_safe_summary ?? "No spoiler-safe summary has been generated yet."}</p></div>
+        </div> :
+        <><h2>Table of contents</h2>{(volume?.chapters ?? []).map((item)=>(
+          <button type="button" className={item.id===syncChapterId?"chapter-link active":"chapter-link"} key={item.id} onClick={()=>setView("reader")}>
+            <span>{String(item.chapter_number).padStart(2,"0")}</span>{item.title}
+            {item.id===syncChapterId&&<Icon name="check" size={15}/>}
+          </button>
+        ))}</>}
       </aside>}
     </div>
     <div className="reader-bottom">
       <div className="themes">{(["light","sepia","dark","amoled"] as const).map(t=><button type="button" aria-label={`${t} reading theme`} className={`${t} ${theme===t?"active":""}`} key={t} onClick={()=>setTheme(t)}></button>)}</div>
-      <div className="page-nav"><Button variant="ghost" onClick={() => { const n = Math.max(1, pageNumber - 1); setPageNumber(n); void persistProgress(n); }}>Previous</Button><span>{Math.round((pageNumber / 228) * 100)}% · {Math.max(0, 228 - pageNumber)} pages left</span><Button variant="primary" onClick={() => { const n = Math.min(228, pageNumber + 1); setPageNumber(n); void persistProgress(n); }}>Next page <Icon name="arrow"/></Button></div>
+      <div className="page-nav">
+        <Button variant="ghost" onClick={() => void goToPage(pageNumber - 1)}>Previous</Button>
+        <span>{Math.round((pageNumber / pageCount) * 100)}% · {Math.max(0, pageCount - pageNumber)} pages left</span>
+        <Button variant="primary" onClick={() => void goToPage(pageNumber + 1)}>Next page <Icon name="arrow"/></Button>
+      </div>
       <Button variant="ghost" icon="settings">Reading settings</Button>
     </div>
-    {saved && <div className="toast"><Icon name="check"/><div><strong>Bookmark added</strong><small>Page 142 · Chapter 7</small></div></div>}
+    {saved && <div className="toast"><Icon name="check"/><div><strong>Bookmark added</strong><small>Page {pageNumber} · Chapter {chapterNumber}</small></div></div>}
   </div>;
 }
+
 
 const stages = ["Validate file","Extract text & OCR","Analyze structure","Detect chapters","Extract metadata","Generate summaries","Characters & glossary","Generate embeddings","Human review","Publish"];
 
@@ -405,5 +537,5 @@ export default function App() {
 
   async function handleSignOut() { await signOut(); setUser(null); setView("home"); }
 
-  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView}/>} {view === "search" && <SearchView setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>} {view === "admin" && <AdminView catalog={catalog} user={user} onAuth={() => setAuthOpen(true)}/>}  {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} onAuth={() => setAuthOpen(true)}/>}</div><BottomNav view={view} setView={setView}/></div>{view === "reader" && <Reader setView={setView} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
+  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView}/>} {view === "search" && <SearchView setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>} {view === "admin" && <AdminView catalog={catalog} user={user} onAuth={() => setAuthOpen(true)}/>}  {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} onAuth={() => setAuthOpen(true)}/>}</div><BottomNav view={view} setView={setView}/></div>{view === "reader" && <Reader setView={setView} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null} volume={targetVolume} chapter={targetChapter}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
 }

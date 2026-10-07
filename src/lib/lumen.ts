@@ -48,8 +48,42 @@ export async function toggleBookmark(args:{user:User;volumeId:string;chapterId:s
   return true;
 }
 
+export type ChapterPage = {
+  id:string;
+  chapter_id:string;
+  page_number:number;
+  source_pdf_page:number|null;
+  content:string;
+  ocr_used:boolean;
+  extraction_confidence:number|null;
+};
+
+export async function fetchChapterPages(chapterId:string):Promise<ChapterPage[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("chapter_pages")
+    .select("id,chapter_id,page_number,source_pdf_page,content,ocr_used,extraction_confidence")
+    .eq("chapter_id", chapterId)
+    .order("page_number", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as ChapterPage[];
+}
+
 export async function signIn(email:string,password:string){ if(!supabase) throw new Error("Supabase belum dikonfigurasi di environment aplikasi."); return supabase.auth.signInWithPassword({email,password}); }
-export async function signUp(email:string,password:string,displayName:string){ if(!supabase) throw new Error("Supabase belum dikonfigurasi di environment aplikasi."); return supabase.auth.signUp({email,password,options:{data:{full_name:displayName}}}); }
+export async function signUp(email:string,password:string,displayName:string){
+  if(!supabase) throw new Error("Supabase belum dikonfigurasi di environment aplikasi.");
+  const redirectOrigin = typeof window !== "undefined" ? window.location.origin : "";
+  const configuredRedirect = (import.meta.env.VITE_PUBLIC_APP_URL as string | undefined)?.trim();
+  const emailRedirectTo = configuredRedirect || redirectOrigin || undefined;
+  return supabase.auth.signUp({
+    email,
+    password,
+    options:{
+      data:{full_name:displayName},
+      ...(emailRedirectTo ? { emailRedirectTo } : {}),
+    }
+  });
+}
 export async function signOut(){ if(!supabase) return; const {error}=await supabase.auth.signOut(); if(error) throw error; }
 
 export async function uploadVolumePdf(args:{user:User;volumeId:string;file:File}) {
