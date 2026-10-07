@@ -168,6 +168,7 @@ Deno.serve(
       );
 
       const openaiApiKey = Deno.env.get("OPENAI_API_KEY");
+      const openaiModel = Deno.env.get("OPENAI_MODEL") || "gpt-6-luna";
       if (!openaiApiKey) {
         await ctx.supabaseAdmin.from("processing_jobs").update({
           status: "failed",
@@ -202,7 +203,7 @@ Deno.serve(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "gpt-5.6",
+          model: openaiModel,
           input: [{
             role: "user",
             content: [
@@ -273,7 +274,7 @@ Deno.serve(
         ...(volume?.metadata ?? {}),
         ai_intake: {
           provider: "openai",
-          model: "gpt-5.6",
+          model: openaiModel,
           generated_at: new Date().toISOString(),
           output_text: payload?.output_text ?? "",
         },
