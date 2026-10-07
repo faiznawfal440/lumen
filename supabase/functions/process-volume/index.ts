@@ -75,7 +75,7 @@ Deno.serve(
 
       const { data: job, error: jobError } = await ctx.supabaseAdmin
         .from("processing_jobs")
-        .select("id, volume_id, input_path, status, progress_percent")
+        .select("id, volume_id, input_path, file_size_bytes, status, progress_percent")
         .eq("id", job_id)
         .maybeSingle();
 
@@ -133,6 +133,32 @@ Deno.serve(
         "completed",
         100,
       );
+
+      const maxDirectPdfBytes = 50 * 1024 * 1024;
+      if (job.file_size_bytes && job.file_size_bytes > maxDirectPdfBytes) {
+        await ctx.supabaseAdmin.from("processing_jobs").update({
+          status: "failed",
+          current_stage: "Extract text & OCR",
+          progress_percent: 2,
+          error_message: "This AI intake path accepts PDFs up to 50 MB per OpenAI request. The PDF is safely stored; large-file chunking is not enabled yet.",
+          finished_at: new Date().toISOString(),
+        }).eq("id", job_id);
+
+        await updateStage(
+          ctx.supabaseAdmin,
+          job_id,
+          "extract_text_ocr",
+          "failed",
+          0,
+          { reason: "PDF exceeds 50 MB direct input limit", bytes: job.file_size_bytes },
+        );
+
+        return Response.json(
+          { error: "PDF is larger than 50 MB. Large-file chunking will be handled in the next ingestion phase." },
+          { status: 413, headers: corsHeaders },
+        );
+      }
+
       await updateStage(
         ctx.supabaseAdmin,
         job_id,
