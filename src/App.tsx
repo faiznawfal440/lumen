@@ -1,6 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import type { User } from "@supabase/supabase-js";
+import { fetchCatalog, fetchUserBookmarks, fetchUserProgress, signIn, signUp, signOut, toggleBookmark, type CatalogBook, type UserBookmark } from "./lib/lumen";
+import { supabase } from "./lib/supabase";
 
-type View = "home" | "search" | "reader" | "admin";
+type View = "home" | "search" | "reader" | "admin" | "library";
 type IconName =
   | "home" | "compass" | "book" | "search" | "users" | "bell" | "settings"
   | "arrow" | "play" | "star" | "clock" | "bookmark" | "sparkles" | "menu"
@@ -15,12 +18,29 @@ const photos = {
   moon: "https://images.unsplash.com/photo-1642677674839-b9e5b94ea88c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixlib=rb-4.1.0&q=80&w=700",
 };
 
-const books = [
+type DisplayBook = { title:string; alt:string; author:string; image:string; rating:string; tag:string; volume:string; fresh:boolean };
+let books: DisplayBook[] = [
   { title: "The Saint of Hollow Skies", alt: "Sora no Seijo", author: "Mina Kurosawa", image: photos.castle, rating: "4.9", tag: "Fantasy", volume: "Vol. 4", fresh: true },
   { title: "Asteria Academy", alt: "Mahō Gakuen Asteria", author: "Ren Ishikawa", image: photos.tower, rating: "4.8", tag: "Academy", volume: "Vol. 7", fresh: true },
   { title: "The Last Cartographer", alt: "Saigo no Chizu-shi", author: "Aya Mori", image: photos.hill, rating: "4.7", tag: "Adventure", volume: "Vol. 3", fresh: false },
   { title: "Letters Beyond the Moon", alt: "Tsuki no Tegami", author: "Haru Senda", image: photos.moon, rating: "4.9", tag: "Drama", volume: "Vol. 6", fresh: false },
 ];
+
+function catalogToDisplayBooks(items: CatalogBook[]): DisplayBook[] {
+  return items.map((book) => {
+    const volume = book.volumes.at(-1);
+    return {
+      title: book.title,
+      alt: book.alternate_title ?? "",
+      author: book.author ?? "Unknown author",
+      image: book.cover_path ?? photos.castle,
+      rating: book.rating_avg?.toFixed(1) ?? "—",
+      tag: book.genres[0] ?? "Novel",
+      volume: volume ? `Vol. ${volume.volume_number}` : "Novel",
+      fresh: Boolean(book.featured),
+    };
+  });
+}
 
 function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
@@ -63,7 +83,7 @@ function Logo({ compact = false }: { compact?: boolean }) {
   return <div className="logo"><span className="logo-mark">L</span>{!compact && <span>Lumen</span>}</div>;
 }
 
-function Sidebar({ view, setView }: { view: View; setView: (view: View) => void }) {
+function Sidebar({ view, setView, onAuth }: { view: View; setView: (view: View) => void; onAuth: () => void }) {
   const items: { id: View | "library" | "community"; label: string; icon: IconName }[] = [
     { id: "home", label: "Home", icon: "home" }, { id: "search", label: "Explore", icon: "compass" },
     { id: "library", label: "My Library", icon: "library" }, { id: "community", label: "Community", icon: "users" },
@@ -71,7 +91,7 @@ function Sidebar({ view, setView }: { view: View; setView: (view: View) => void 
   return <aside className="sidebar">
     <Logo />
     <nav className="side-nav" aria-label="Main navigation">
-      {items.map((item) => <button type="button" key={item.id} className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => setView(item.id === "library" || item.id === "community" ? "home" : item.id)}><Icon name={item.icon}/><span>{item.label}</span></button>)}
+      {items.map((item) => <button type="button" key={item.id} className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => setView(item.id === "community" ? "home" : item.id)}><Icon name={item.icon}/><span>{item.label}</span></button>)}
     </nav>
     <div className="side-label">Workspace</div>
     <button type="button" className={`nav-item ${view === "admin" ? "active" : ""}`} onClick={() => setView("admin")}><Icon name="sparkles"/><span>AI Studio</span></button>
@@ -83,18 +103,18 @@ function Sidebar({ view, setView }: { view: View; setView: (view: View) => void 
   </aside>;
 }
 
-function Topbar({ title, setView }: { title?: string; setView: (view: View) => void }) {
+function Topbar({ title, setView, user, onAuth }: { title?: string; setView: (view: View) => void; user: User | null; onAuth: () => void }) {
   return <header className="topbar">
     <div className="mobile-logo"><Logo compact /></div>
     {title && <strong className="page-title">{title}</strong>}
     <button type="button" className="search-trigger" onClick={() => setView("search")}><Icon name="search"/><span>Search stories, scenes, characters...</span><kbd>⌘ K</kbd></button>
-    <div className="top-actions"><Button variant="icon" icon="bell" label="Notifications"/><span className="avatar small">AK</span></div>
+    <div className="top-actions"><Button variant="icon" icon="bell" label="Notifications"/><button type="button" className="avatar small" onClick={onAuth} aria-label="Account">{user ? ((user.user_metadata?.full_name as string | undefined)?.slice(0,2).toUpperCase() || user.email?.slice(0,2).toUpperCase() || "LR") : "LR"}</button></div>
   </header>;
 }
 
 function BottomNav({ view, setView }: { view: View; setView: (view: View) => void }) {
   return <nav className="bottom-nav" aria-label="Mobile navigation">
-    {([["home","home","Home"],["search","compass","Explore"],["reader","book","Reading"],["admin","sparkles","AI Studio"]] as [View,IconName,string][]).map(([id,icon,label]) =>
+    {([["home","home","Home"],["search","compass","Explore"],["reader","book","Reading"],["library","library","Library"]] as [View,IconName,string][]).map(([id,icon,label]) =>
       <button type="button" key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}><Icon name={icon}/><span>{label}</span></button>)}
   </nav>;
 }
@@ -168,19 +188,35 @@ function SearchView({ setView }: { setView: (view: View) => void }) {
   </main>;
 }
 
-function Reader({ setView }: { setView: (view: View) => void }) {
+function Reader({ setView, user, onAuth, syncVolumeId, syncChapterId }: { setView: (view: View) => void; user: User | null; onAuth: () => void; syncVolumeId: string | null; syncChapterId: string | null }) {
   const [theme, setTheme] = useState<"light"|"sepia"|"dark"|"amoled">("sepia");
   const [panel, setPanel] = useState<"toc"|"info"|null>("info");
   const [saved, setSaved] = useState(false);
+  const [pageNumber, setPageNumber] = useState(142);
+  useEffect(() => {
+    if (!user || !syncVolumeId) return;
+    fetchUserBookmarks(user.id).then((items) => setSaved(items.some((item) => item.volume_id === syncVolumeId && item.page_number === pageNumber))).catch(() => undefined);
+  }, [user, syncVolumeId, pageNumber]);
+  async function persistProgress(nextPage: number) {
+    if (!user || !syncVolumeId) return;
+    const pct = Math.max(0, Math.min(100, (nextPage / 228) * 100));
+    const { error } = await import("./lib/lumen").then((m) => m.saveReadingProgress({ user, volumeId: syncVolumeId, chapterId: syncChapterId, pageNumber: nextPage, progressPercent: pct }));
+    if (error) console.debug(error);
+  }
+  async function handleBookmark() {
+    if (!user) { onAuth(); return; }
+    if (!syncVolumeId) return;
+    try { const next = await toggleBookmark({ user, volumeId: syncVolumeId, chapterId: syncChapterId, pageNumber }); setSaved(next); } catch { /* keep reader responsive */ }
+  }
   return <div className={`reader theme-${theme}`}>
     <header className="reader-top">
       <Button variant="icon" icon="close" label="Close reader" onClick={() => setView("home")}/>
       <div className="reader-title"><strong>Asteria Academy — Volume 3</strong><small>Chapter 7 · The Duel Beneath Violet Rain</small></div>
-      <div className="reader-tools"><Button variant="icon" icon="search" label="Search in book"/><Button variant="icon" icon="type" label="Typography settings"/><Button variant="icon" icon="list" label="Table of contents" onClick={()=>setPanel(panel==="toc"?null:"toc")}/><Button variant="icon" icon="panel" label="Knowledge panel" onClick={()=>setPanel(panel==="info"?null:"info")}/><Button variant="icon" icon={saved?"check":"bookmark"} label="Bookmark" onClick={()=>setSaved(!saved)}/></div>
+      <div className="reader-tools"><Button variant="icon" icon="search" label="Search in book"/><Button variant="icon" icon="type" label="Typography settings"/><Button variant="icon" icon="list" label="Table of contents" onClick={()=>setPanel(panel==="toc"?null:"toc")}/><Button variant="icon" icon="panel" label="Knowledge panel" onClick={()=>setPanel(panel==="info"?null:"info")}/><Button variant="icon" icon={saved?"check":"bookmark"} label="Bookmark" onClick={handleBookmark}/></div>
     </header>
     <div className="reader-progress"><i style={{width:"62%"}}></i></div>
     <div className="reader-shell">
-      <aside className="reader-rail"><Button variant="icon" icon="chevron" label="Previous page"/><span>142</span><div className="vertical-track"><i></i></div><span>228</span><Button variant="icon" icon="chevron" label="Next page"/></aside>
+      <aside className="reader-rail"><Button variant="icon" icon="chevron" label="Previous page" onClick={() => { const n = Math.max(1, pageNumber - 1); setPageNumber(n); void persistProgress(n); }}/><span>{pageNumber}</span><div className="vertical-track"><i style={{height:`${Math.min(100, (pageNumber / 228) * 100)}%`}}></i></div><span>228</span><Button variant="icon" icon="chevron" label="Next page" onClick={() => { const n = Math.min(228, pageNumber + 1); setPageNumber(n); void persistProgress(n); }}/></aside>
       <article className="reading-page">
         <div className="chapter-mark"><span>CHAPTER SEVEN</span><i></i></div>
         <h1>The Duel Beneath<br/>Violet Rain</h1>
@@ -204,7 +240,7 @@ function Reader({ setView }: { setView: (view: View) => void }) {
     </div>
     <div className="reader-bottom">
       <div className="themes">{(["light","sepia","dark","amoled"] as const).map(t=><button type="button" aria-label={`${t} reading theme`} className={`${t} ${theme===t?"active":""}`} key={t} onClick={()=>setTheme(t)}></button>)}</div>
-      <div className="page-nav"><Button variant="ghost">Previous</Button><span>62% · 2h 14m left</span><Button variant="primary">Next page <Icon name="arrow"/></Button></div>
+      <div className="page-nav"><Button variant="ghost" onClick={() => { const n = Math.max(1, pageNumber - 1); setPageNumber(n); void persistProgress(n); }}>Previous</Button><span>{Math.round((pageNumber / 228) * 100)}% · {Math.max(0, 228 - pageNumber)} pages left</span><Button variant="primary" onClick={() => { const n = Math.min(228, pageNumber + 1); setPageNumber(n); void persistProgress(n); }}>Next page <Icon name="arrow"/></Button></div>
       <Button variant="ghost" icon="settings">Reading settings</Button>
     </div>
     {saved && <div className="toast"><Icon name="check"/><div><strong>Bookmark added</strong><small>Page 142 · Chapter 7</small></div></div>}
@@ -239,8 +275,69 @@ function AdminView() {
   </main>;
 }
 
+
+function LibraryView({ user, progress, bookmarks, onAuth }: { user: User | null; progress: Map<string, number>; bookmarks: UserBookmark[]; onAuth: () => void }) {
+  if (!user) return <main className="page"><section className="empty-state"><div className="library-icon">◫</div><h1>Your library</h1><p>Sign in to sync reading progress and bookmarks across devices.</p><Button onClick={onAuth}>Sign in to continue</Button></section></main>;
+  const tracked = books.filter((book) => book.volume);
+  return <main className="page library-page"><div className="search-intro"><span className="hero-kicker dark">YOUR LIBRARY</span><h1>Everything you’re reading.</h1><p>Your reading activity is synced with your Lumen account.</p></div><section><div className="section-heading"><div><span>YOUR TITLES</span><h2>Recent library</h2></div></div><div className="book-grid">{tracked.map((book) => <article className="book-card" key={book.title}><div className="cover-wrap"><img src={book.image} alt={`Cover of ${book.title}`} /></div><div className="book-meta"><div className="rating"><Icon name="star" size={14}/>{book.rating}</div><span>{book.tag}</span></div><h3>{book.title}</h3><p>{book.alt}</p><small>{book.author} · {Math.round(progress.size ? Math.max(...progress.values()) : 0)}% synced</small></article>)}</div></section><section className="library-stats"><div><span>Bookmarks</span><strong>{bookmarks.length}</strong></div><div><span>Synced titles</span><strong>{tracked.length}</strong></div><div><span>Cloud sync</span><strong>Live</strong></div></section></main>;
+}
+
+function AuthDialog({ open, onClose, onSignedIn }: { open: boolean; onClose: () => void; onSignedIn: (user: User) => void }) {
+  const [mode,setMode]=useState<"signin"|"signup">("signin");
+  const [email,setEmail]=useState(""); const [password,setPassword]=useState(""); const [name,setName]=useState(""); const [message,setMessage]=useState(""); const [loading,setLoading]=useState(false);
+  if (!open) return null;
+  async function submit() {
+    setLoading(true); setMessage("");
+    try {
+      if (mode==="signin") {
+        const result=await signIn(email.trim(),password); if(result.error) throw result.error;
+        if(result.data.user){onSignedIn(result.data.user);onClose();}
+      } else {
+        const result=await signUp(email.trim(),password,name.trim()||"Lumen Reader"); if(result.error) throw result.error;
+        if(result.data.session?.user){onSignedIn(result.data.session.user);onClose();} else setMessage("Account created. Check your email to confirm the account.");
+      }
+    } catch(error) { setMessage(error instanceof Error ? error.message : "Authentication failed."); }
+    finally { setLoading(false); }
+  }
+  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="auth-modal" role="dialog" aria-modal="true" onMouseDown={(e)=>e.stopPropagation()}><button type="button" className="modal-close" onClick={onClose} aria-label="Close">×</button><div className="auth-brand"><span className="logo-mark">L</span><div><strong>Lumen</strong><small>{mode==="signin"?"Welcome back, reader.":"Create your reader account."}</small></div></div><div className="auth-tabs"><button type="button" className={mode==="signin"?"active":""} onClick={()=>setMode("signin")}>Sign in</button><button type="button" className={mode==="signup"?"active":""} onClick={()=>setMode("signup")}>Create account</button></div>{mode==="signup"&&<label>Display name<input value={name} onChange={(e)=>setName(e.target.value)} placeholder="Your reader name"/></label>}<label>Email<input type="email" value={email} onChange={(e)=>setEmail(e.target.value)} placeholder="you@example.com"/></label><label>Password<input type="password" value={password} onChange={(e)=>setPassword(e.target.value)} placeholder="Password"/></label>{message&&<div className="auth-message">{message}</div>}<button type="button" className="btn btn-primary auth-submit" onClick={submit} disabled={loading}>{loading?"Working…":mode==="signin"?"Sign in":"Create account"}</button><small className="auth-note">Your account syncs progress and bookmarks across devices.</small></section></div>;
+}
+
+
 export default function App() {
   const [view, setView] = useState<View>("home");
-  if (view === "reader") return <Reader setView={setView}/>;
-  return <div className="app-shell"><Sidebar view={view} setView={setView}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : undefined} setView={setView}/>{view === "home" && <Home setView={setView}/>} {view === "search" && <SearchView setView={setView}/>} {view === "admin" && <AdminView/>}</div><BottomNav view={view} setView={setView}/></div>;
+  const [user, setUser] = useState<User | null>(null);
+  const [catalog, setCatalog] = useState<CatalogBook[]>([]);
+  const [progress, setProgress] = useState<Map<string, number>>(new Map());
+  const [bookmarks, setBookmarks] = useState<UserBookmark[]>([]);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [, forceCatalogRefresh] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    fetchCatalog().then((items) => {
+      if (!active) return;
+      setCatalog(items);
+      if (items.length) { books = catalogToDisplayBooks(items); forceCatalogRefresh((v) => v + 1); }
+    }).catch(() => undefined);
+    if (!supabase) return () => { active = false; };
+    supabase.auth.getSession().then(({ data }) => { if (active) setUser(data.session?.user ?? null); });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
+    return () => { active = false; listener.subscription.unsubscribe(); };
+  }, []);
+
+  useEffect(() => {
+    if (!user) { setProgress(new Map()); setBookmarks([]); return; }
+    Promise.all([fetchUserProgress(user.id), fetchUserBookmarks(user.id)]).then(([items, saved]) => {
+      setProgress(new Map(items.map((item) => [item.volume_id, Number(item.progress_percent)])));
+      setBookmarks(saved);
+    }).catch(() => undefined);
+  }, [user]);
+
+  const targetBook = catalog.find((book) => book.slug === "asteria-academy") ?? catalog.find((book) => book.featured) ?? catalog[0];
+  const targetVolume = targetBook?.volumes.at(-1);
+  const targetChapter = targetVolume?.chapters[0];
+
+  async function handleSignOut() { await signOut(); setUser(null); setView("home"); }
+
+  return <><div className="app-shell"><Sidebar view={view} setView={setView} onAuth={() => setAuthOpen(true)}/><div className="main-shell"><Topbar title={view === "admin" ? "Content operations" : view === "library" ? "My library" : undefined} setView={setView} user={user} onAuth={() => setAuthOpen(true)}/>{view === "home" && <Home setView={setView}/>} {view === "search" && <SearchView setView={setView}/>} {view === "admin" && <AdminView/>} {view === "library" && <LibraryView user={user} progress={progress} bookmarks={bookmarks} onAuth={() => setAuthOpen(true)}/>}</div><BottomNav view={view} setView={setView}/></div>{view === "reader" && <Reader setView={setView} user={user} onAuth={() => setAuthOpen(true)} syncVolumeId={targetVolume?.id ?? null} syncChapterId={targetChapter?.id ?? null}/>}<AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onSignedIn={(nextUser) => setUser(nextUser)}/>{user && <button type="button" className="signout-fab" onClick={handleSignOut}>Sign out</button>}</>;
 }
